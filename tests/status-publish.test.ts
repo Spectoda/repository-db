@@ -118,6 +118,68 @@ describe("publish flow", () => {
 		}
 	});
 
+	test("pull integrates remote changes and preserves the local draft (autostash)", () => {
+		const fixture = createFixtureRepo();
+		try {
+			const db = RepositoryDb.open(fixture.mountPath);
+
+			// Remote publishes one document…
+			const second = cloneFixture(fixture);
+			writeFixtureDocument(second, "thing-remote", { name: "remote" });
+			git(second, ["add", "--all"]);
+			git(second, ["commit", "--message", "remote change"]);
+			git(second, ["push", "origin", fixture.branch]);
+
+			// …while a local draft on a different document is in progress.
+			writeFixtureDocument(fixture.mountPath, "thing-local", { name: "draft" });
+
+			const result = db.pull();
+			expect(result).toEqual({ state: "pulled", behind: 1 });
+
+			// Remote document arrived, local draft survived uncommitted.
+			expect(
+				readFileSync(
+					path.join(fixture.mountPath, "data/things/thing-remote.yaml"),
+					"utf8",
+				),
+			).toContain("remote");
+			const status = db.status();
+			expect(status.state).toBe("draft");
+			expect(status.dirtyPaths).toContain("data/things/thing-local.yaml");
+			expect(status.behind).toBe(0);
+
+			expect(db.pull()).toEqual({ state: "up_to_date", behind: 0 });
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
+	test("pull conflict records recovery state and blocks writes", () => {
+		const fixture = createFixtureRepo();
+		try {
+			const db = RepositoryDb.open(fixture.mountPath);
+			writeFixtureDocument(fixture.mountPath, "thing-1", { name: "seed" });
+			git(fixture.mountPath, ["add", "--all"]);
+			git(fixture.mountPath, ["commit", "--message", "seed"]);
+			git(fixture.mountPath, ["push", "origin", fixture.branch]);
+
+			const second = cloneFixture(fixture, "second-pull");
+			writeFixtureDocument(second, "thing-1", { name: "remote-version" });
+			git(second, ["add", "--all"]);
+			git(second, ["commit", "--message", "remote edit"]);
+			git(second, ["push", "origin", fixture.branch]);
+
+			writeFixtureDocument(fixture.mountPath, "thing-1", { name: "local-version" });
+			expect(() => db.pull()).toThrow(/pull stopped: conflict/);
+			expect(db.status().state).toBe("conflict");
+
+			db.abortConflict();
+			expect(db.status().state).toBe("draft");
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
 	test("nothing_to_publish on a clean tree", () => {
 		const fixture = createFixtureRepo();
 		try {

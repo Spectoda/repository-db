@@ -9,7 +9,7 @@ import {
 import { loadRepositoryDbConfig } from "./config.ts";
 import { gitFetch } from "./git.ts";
 import { runValidateCommands } from "./generated.ts";
-import { publish } from "./publish.ts";
+import { publish, pullRemote, type PullResult } from "./publish.ts";
 import { deriveSyncStatus, type StatusOptions } from "./status.ts";
 import type {
 	ConflictState,
@@ -63,6 +63,11 @@ export class RepositoryDb {
 
 	publish(options: PublishOptions): PublishResult {
 		return publish(this.mountRoot, this.config, options);
+	}
+
+	/** Fetch + integrate remote changes (autostash-safe, conflict-guarded). */
+	pull(): PullResult {
+		return pullRemote(this.mountRoot, this.config);
 	}
 
 	conflict(): ConflictState | undefined {

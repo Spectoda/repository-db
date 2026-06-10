@@ -9,6 +9,7 @@ import { assertCredentials } from "./credentials.ts";
 import {
 	gitAheadBehind,
 	gitDirtyPaths,
+	gitFetch,
 	gitHeadCommit,
 	gitOperationInProgress,
 	gitUnmergedPaths,
@@ -50,6 +51,88 @@ function defaultSubject(
 			? ` [${entities.slice(0, 3).join(", ")}${entities.length > 3 ? ", …" : ""}]`
 			: "";
 	return `${config.app}: publish ${parts.join(", ") || "no changes"}${entitySuffix}`;
+}
+
+/**
+ * Integrate remote changes via `git pull --rebase --autostash` with conflict
+ * detection from the repository state. CAUTION: git exits 0 even when
+ * applying the autostash produced conflicts ("Applying autostash resulted in
+ * conflicts."), and committing that working tree would persist conflict
+ * markers into canonical data — hence the explicit rebase/unmerged checks.
+ * On conflict a recovery state (pre-pull HEAD + autostash SHA) is recorded,
+ * further writes are blocked and a {@link RepositoryDbError} is thrown.
+ * The caller must hold the publish lock.
+ */
+function integrateRemoteChanges(
+	mountRoot: string,
+	config: RepositoryDbConfig,
+	operation: "publish" | "pull",
+): void {
+	const headBefore = gitHeadCommit(mountRoot);
+	const pull = runGit(mountRoot, [
+		"pull",
+		"--rebase",
+		"--autostash",
+		"origin",
+		config.dataRepo.branch,
+	]);
+	const midOperation = gitOperationInProgress(mountRoot);
+	const unmerged = gitUnmergedPaths(mountRoot);
+	if (pull.status !== 0 || midOperation || unmerged.length > 0) {
+		const state = writeConflictState(mountRoot, {
+			detectedAt: new Date().toISOString(),
+			operation: `${operation}:pull--rebase--autostash`,
+			gitState:
+				[
+					midOperation ? `in-progress: ${midOperation}` : undefined,
+					unmerged.length > 0 ? `unmerged: ${unmerged.join(", ")}` : undefined,
+					pull.stderr.trim() || pull.stdout.trim(),
+				]
+					.filter(Boolean)
+					.join("\n") || "unknown",
+			message: `${operation} stopped: conflict while integrating remote changes (pull --rebase --autostash)`,
+			preOperationHead: headBefore,
+			autostashSha: currentAutostashSha(mountRoot),
+		});
+		throw new RepositoryDbError(
+			`${operation}_conflict`,
+			`${state.message}\n\n${state.handoff}`,
+		);
+	}
+}
+
+export interface PullResult {
+	state: "up_to_date" | "pulled";
+	/** Remote commits integrated by this pull. */
+	behind: number;
+}
+
+/**
+ * Fetch and integrate remote changes into the local checkout, preserving any
+ * local draft via the autostash machinery (same conflict-safe path the
+ * publish flow uses). Intended for the app's automatic background pull, so
+ * remote publishes from other machines appear locally without manual git
+ * work. Takes the publish lock for mutual exclusion with a running publish.
+ */
+export function pullRemote(
+	mountRoot: string,
+	config: RepositoryDbConfig,
+): PullResult {
+	assertDataRepoBoundary(mountRoot, config);
+	assertNoActiveConflict(mountRoot);
+
+	const releaseLock = acquirePublishLock(mountRoot);
+	try {
+		gitFetch(mountRoot);
+		const { behind } = gitAheadBehind(mountRoot, config.dataRepo.branch);
+		if (behind === 0) {
+			return { state: "up_to_date", behind: 0 };
+		}
+		integrateRemoteChanges(mountRoot, config, "pull");
+		return { state: "pulled", behind };
+	} finally {
+		releaseLock();
+	}
 }
 
 /**
@@ -121,43 +204,7 @@ export function publish(
 		}
 
 		// Integrate remote changes before committing the local batch.
-		const headBefore = gitHeadCommit(mountRoot);
-		const pull = runGit(mountRoot, [
-			"pull",
-			"--rebase",
-			"--autostash",
-			"origin",
-			config.dataRepo.branch,
-		]);
-		// CAUTION: git exits 0 even when applying the autostash produced
-		// conflicts ("Applying autostash resulted in conflicts."). Committing
-		// that working tree would persist conflict markers into canonical
-		// data, so conflicts are detected from the repository state instead
-		// of the exit code.
-		const midOperation = gitOperationInProgress(mountRoot);
-		const unmerged = gitUnmergedPaths(mountRoot);
-		if (pull.status !== 0 || midOperation || unmerged.length > 0) {
-			const state = writeConflictState(mountRoot, {
-				detectedAt: new Date().toISOString(),
-				operation: "publish:pull--rebase--autostash",
-				gitState:
-					[
-						midOperation ? `in-progress: ${midOperation}` : undefined,
-						unmerged.length > 0 ? `unmerged: ${unmerged.join(", ")}` : undefined,
-						pull.stderr.trim() || pull.stdout.trim(),
-					]
-						.filter(Boolean)
-						.join("\n") || "unknown",
-				message:
-					"publish stopped: conflict while integrating remote changes (pull --rebase --autostash)",
-				preOperationHead: headBefore,
-				autostashSha: currentAutostashSha(mountRoot),
-			});
-			throw new RepositoryDbError(
-				"publish_conflict",
-				`${state.message}\n\n${state.handoff}`,
-			);
-		}
+		integrateRemoteChanges(mountRoot, config, "publish");
 
 		// Stage the whole batch. ENGINE_DIR is gitignored in the data repo;
 		// undeclared generated diffs were already refused above.

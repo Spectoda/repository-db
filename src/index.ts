@@ -11,7 +11,8 @@ export {
 export { assertDataRepoBoundary, normalizeRemoteUrl } from "./boundary.ts";
 export { deriveSyncStatus } from "./status.ts";
 export type { StatusOptions } from "./status.ts";
-export { publish } from "./publish.ts";
+export { publish, pullRemote } from "./publish.ts";
+export type { PullResult } from "./publish.ts";
 export { initDataRepo } from "./init.ts";
 export type { InitOptions, InitResult } from "./init.ts";
 export {

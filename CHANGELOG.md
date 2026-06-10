@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 — 20260610.2
+
+- New public `pullRemote` / `RepositoryDb.pull()` / `repository-db sync
+  --pull`: fetch + integrate remote changes via the same autostash-safe,
+  conflict-guarded path the publish flow uses, under the publish lock.
+  Designed for automatic background pulls from apps — local drafts survive
+  via the autostash, conflicts record recovery state and block writes.
+
 ## 0.1.0 — 20260610
 
 - Initial engine release for the DEV-6353 Deals v3 pilot.

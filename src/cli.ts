@@ -12,7 +12,7 @@ Usage:
                      [--create-remote] [--visibility private|public]
   repository-db status   [--mount <path>] [--fetch] [--json]
   repository-db validate [--mount <path>]
-  repository-db sync     [--mount <path>] [--json]
+  repository-db sync     [--mount <path>] [--pull] [--json]
   repository-db publish  [--mount <path>] --actor <actor> --source <source>
                          [--summary <text>] [--entity <id>]... [--json]
   repository-db conflict [--mount <path>] [--abort | --resolved] [--json]
@@ -47,6 +47,7 @@ function parseArgs(argv: string[]): Args {
 			"abort",
 			"resolved",
 			"create-remote",
+			"pull",
 		]);
 		if (boolFlags.has(name)) {
 			flags.set(name, true);
@@ -142,13 +143,26 @@ function main(argv: string[]): number {
 		}
 		case "sync": {
 			const db = RepositoryDb.open(mountPath(args));
+			if (args.flags.get("pull") === true) {
+				const pulled = db.pull();
+				const status = db.status();
+				emit(args, { pulled, status }, () =>
+					[
+						pulled.state === "pulled"
+							? `pulled ${pulled.behind} remote commit(s) (rebase --autostash)`
+							: "already up to date with the remote",
+						`state: ${status.state}`,
+					].join("\n"),
+				);
+				return 0;
+			}
 			const status = db.status({ fetch: true });
 			emit(args, status, () =>
 				[
 					`fetched origin; state: ${status.state}`,
 					`ahead: ${status.ahead}, behind: ${status.behind}`,
 					status.behind > 0
-						? "remote changes available — publish integrates them via pull --rebase, or pull manually when clean"
+						? "remote changes available — run `repository-db sync --pull` (autostash-safe) or publish"
 						: "checkout is up to date with the remote",
 				].join("\n"),
 			);
