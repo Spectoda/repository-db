@@ -1,0 +1,102 @@
+import { describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { assertDataRepoBoundary, normalizeRemoteUrl } from "../src/boundary.ts";
+import { CONFIG_FILE_NAME, parseRepositoryDbConfig } from "../src/config.ts";
+import { RepositoryDb } from "../src/repositoryDb.ts";
+import { toStableYaml } from "../src/yamlIo.ts";
+import { createFixtureRepo, fixtureConfigValue, git } from "./fixtures.ts";
+
+describe("git boundary guard", () => {
+	test("normalizes ssh and https remote spellings to the same identity", () => {
+		expect(normalizeRemoteUrl("git@github.com:Spectoda/deals-data.git")).toBe(
+			normalizeRemoteUrl("https://github.com/Spectoda/deals-data"),
+		);
+		expect(normalizeRemoteUrl("ssh://git@github.com/Spectoda/deals-data.git")).toBe(
+			normalizeRemoteUrl("https://github.com/Spectoda/Deals-Data.git"),
+		);
+		expect(normalizeRemoteUrl("/tmp/origin.git")).toBe("/tmp/origin.git");
+		expect(normalizeRemoteUrl("/tmp/Origin.git")).not.toBe("/tmp/origin.git");
+	});
+
+	test("accepts a correct mount", () => {
+		const fixture = createFixtureRepo();
+		try {
+			const db = RepositoryDb.open(fixture.mountPath);
+			expect(db.config.app).toBe("fixture");
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
+	test("refuses to operate from a parent repository", () => {
+		const fixture = createFixtureRepo();
+		try {
+			// Simulate the modules/deals situation: a parent Git repo containing
+			// the data checkout in a subdirectory, with a stray config at its
+			// root pointing at the data repo.
+			const parent = path.join(fixture.root, "parent");
+			mkdirSync(parent, { recursive: true });
+			git(fixture.root, ["init", "parent"]);
+			const config = parseRepositoryDbConfig(
+				fixtureConfigValue(fixture.originPath, fixture.branch),
+			);
+			writeFileSync(
+				path.join(parent, CONFIG_FILE_NAME),
+				toStableYaml(fixtureConfigValue(fixture.originPath, fixture.branch)),
+				"utf8",
+			);
+			const nested = path.join(parent, "db");
+			mkdirSync(nested);
+			expect(() => assertDataRepoBoundary(nested, config)).toThrow(
+				/not the root of its Git repository/,
+			);
+			// Parent repo root itself: remote mismatch (parent has no origin).
+			expect(() => assertDataRepoBoundary(parent, config)).toThrow(
+				/no "origin" remote/,
+			);
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
+	test("refuses a wrong remote", () => {
+		const fixture = createFixtureRepo();
+		try {
+			const config = parseRepositoryDbConfig(
+				fixtureConfigValue("git@github.com:Spectoda/other-data.git", fixture.branch),
+			);
+			expect(() => assertDataRepoBoundary(fixture.mountPath, config)).toThrow(
+				/origin remote mismatch/,
+			);
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
+	test("refuses a wrong branch", () => {
+		const fixture = createFixtureRepo();
+		try {
+			git(fixture.mountPath, ["checkout", "-b", "feature"]);
+			const config = parseRepositoryDbConfig(
+				fixtureConfigValue(fixture.originPath, fixture.branch),
+			);
+			expect(() => assertDataRepoBoundary(fixture.mountPath, config)).toThrow(
+				/branch mismatch/,
+			);
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
+	test("refuses a directory without repository-db.yaml", () => {
+		const fixture = createFixtureRepo();
+		try {
+			expect(() => RepositoryDb.open(fixture.root)).toThrow(
+				/repository-db.yaml not found/,
+			);
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+});
