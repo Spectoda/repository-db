@@ -43,6 +43,24 @@ function remoteRepoSlug(remote: string): string | undefined {
 	return match?.[1];
 }
 
+function assertSafeRemote(remote: string): void {
+	if (!remote.trim() || remote.trim().startsWith("-")) {
+		throw new RepositoryDbError(
+			"invalid_remote",
+			`remote URL must not be empty or start with "-": ${remote}`,
+		);
+	}
+}
+
+function assertSafeBranch(branch: string): void {
+	if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch)) {
+		throw new RepositoryDbError(
+			"invalid_branch",
+			`branch name has unexpected format: ${branch}`,
+		);
+	}
+}
+
 const DATA_REPO_GITIGNORE = `# repository-db local engine layer (lock, conflict state, caches) — never committed
 /${ENGINE_DIR}/
 node_modules/
@@ -90,6 +108,8 @@ export interface InitResult {
  */
 export function initDataRepo(options: InitOptions): InitResult {
 	const mountPath = path.resolve(options.mountPath);
+	assertSafeRemote(options.remote);
+	assertSafeBranch(options.branch);
 	assertCredentials(options.remote);
 
 	let created = false;
@@ -125,8 +145,11 @@ export function initDataRepo(options: InitOptions): InitResult {
 	let cloned = false;
 	if (!existsSync(mountPath)) {
 		mkdirSync(path.dirname(mountPath), { recursive: true });
+		// `--` prevents option injection through a crafted remote URL
+		// (CVE-2018-17456 family); library callers bypass the CLI flag guard.
 		const clone = runGit(path.dirname(mountPath), [
 			"clone",
+			"--",
 			options.remote,
 			mountPath,
 		]);

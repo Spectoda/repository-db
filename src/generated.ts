@@ -1,5 +1,12 @@
 import { execSync } from "node:child_process";
 import { gitDirtyPaths } from "./git.ts";
+
+/**
+ * Hard ceiling for config-supplied materializer/validate commands. A hung
+ * command would otherwise wedge publish forever while the publish lock is
+ * held (stale-lock reclaim only kicks in after 15 minutes on the same host).
+ */
+const COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 import { ENGINE_DIR } from "./lock.ts";
 import {
 	type RepositoryDbConfig,
@@ -74,6 +81,8 @@ export function materializeGenerated(
 				stdio: ["ignore", "pipe", "pipe"],
 				encoding: "utf8",
 				env: { ...process.env },
+				timeout: COMMAND_TIMEOUT_MS,
+				killSignal: "SIGKILL",
 			});
 		} catch (error) {
 			const detail =
@@ -101,6 +110,8 @@ export function runValidateCommands(
 				stdio: ["ignore", "pipe", "pipe"],
 				encoding: "utf8",
 				env: { ...process.env },
+				timeout: COMMAND_TIMEOUT_MS,
+				killSignal: "SIGKILL",
 			});
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);

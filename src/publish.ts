@@ -2,6 +2,7 @@ import os from "node:os";
 import { assertDataRepoBoundary } from "./boundary.ts";
 import {
 	assertNoActiveConflict,
+	currentAutostashSha,
 	writeConflictState,
 } from "./conflict.ts";
 import { assertCredentials } from "./credentials.ts";
@@ -150,6 +151,7 @@ export function publish(
 				message:
 					"publish stopped: conflict while integrating remote changes (pull --rebase --autostash)",
 				preOperationHead: headBefore,
+				autostashSha: currentAutostashSha(mountRoot),
 			});
 			throw new RepositoryDbError(
 				"publish_conflict",

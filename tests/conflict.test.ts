@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { RepositoryDb } from "../src/repositoryDb.ts";
 import {
@@ -112,6 +112,75 @@ describe("conflict handling", () => {
 				"HEAD:data/things/thing-1.yaml",
 			]);
 			expect(published).toContain("merged-version");
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
+	test("abort pops the recorded autostash and never touches a user stash", () => {
+		const fixture = createFixtureRepo();
+		try {
+			const db = RepositoryDb.open(fixture.mountPath);
+			// Pre-existing user stash with a misleading message that the old
+			// substring heuristic would have popped by mistake.
+			writeFixtureDocument(fixture.mountPath, "thing-user", { name: "user-work" });
+			git(fixture.mountPath, [
+				"stash",
+				"push",
+				"--include-untracked",
+				"-m",
+				"my autostash backup",
+			]);
+
+			seedAndDivergeRemote(fixture);
+			writeFixtureDocument(fixture.mountPath, "thing-1", { name: "local-version" });
+			expect(() =>
+				db.publish({ actor: "a <a@a>", source: "test" }),
+			).toThrow(/publish stopped: conflict/);
+
+			// Conflict state recorded the autostash commit for deterministic abort.
+			const state = JSON.parse(
+				readFileSync(
+					path.join(fixture.mountPath, ".repository-db", "conflict.json"),
+					"utf8",
+				),
+			) as { autostashSha?: string };
+			expect(state.autostashSha).toMatch(/^[0-9a-f]{7,40}$/);
+
+			db.abortConflict();
+			const restored = readFileSync(
+				path.join(fixture.mountPath, "data/things/thing-1.yaml"),
+				"utf8",
+			);
+			expect(restored).toContain("local-version");
+			// The user stash must stay untouched in the stash list.
+			const stashes = git(fixture.mountPath, ["stash", "list", "--format=%gs"]);
+			expect(stashes).toContain("my autostash backup");
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
+	test("abort refuses a tampered preOperationHead instead of resetting blindly", () => {
+		const fixture = createFixtureRepo();
+		try {
+			const db = RepositoryDb.open(fixture.mountPath);
+			seedAndDivergeRemote(fixture);
+			writeFixtureDocument(fixture.mountPath, "thing-1", { name: "local-version" });
+			expect(() =>
+				db.publish({ actor: "a <a@a>", source: "test" }),
+			).toThrow(/publish stopped: conflict/);
+
+			const conflictFile = path.join(
+				fixture.mountPath,
+				".repository-db",
+				"conflict.json",
+			);
+			const state = JSON.parse(readFileSync(conflictFile, "utf8"));
+			state.preOperationHead = "HEAD~100";
+			writeFileSync(conflictFile, JSON.stringify(state), "utf8");
+
+			expect(() => db.abortConflict()).toThrow(/unexpected format/);
 		} finally {
 			rmSync(fixture.root, { recursive: true, force: true });
 		}

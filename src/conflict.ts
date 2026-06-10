@@ -105,11 +105,43 @@ export function assertNoActiveConflict(mountRoot: string): void {
 	}
 }
 
-function topStashIsAutostash(mountRoot: string): boolean {
-	const result = runGit(mountRoot, ["stash", "list", "--format=%gs"]);
-	if (result.status !== 0) return false;
-	const first = result.stdout.split("\n")[0] ?? "";
-	return /autostash/i.test(first);
+const COMMIT_SHA_RE = /^[0-9a-f]{7,40}$/;
+
+/**
+ * Find the current stash ref of the recorded autostash by commit SHA. The
+ * stash index can shift if the user stashes manually during the conflict, so
+ * a positional `stash@{0}` lookup is not reliable.
+ */
+function findStashRefBySha(mountRoot: string, sha: string): string | undefined {
+	const result = runGit(mountRoot, ["stash", "list", "--format=%H %gd"]);
+	if (result.status !== 0) return undefined;
+	for (const line of result.stdout.split("\n")) {
+		const [entrySha, ref] = line.trim().split(/\s+/);
+		if (entrySha && ref && entrySha.startsWith(sha)) return ref;
+	}
+	return undefined;
+}
+
+/** Exact-subject fallback when no autostash SHA was recorded. */
+function topAutostashRef(mountRoot: string): string | undefined {
+	const result = runGit(mountRoot, ["stash", "list", "--format=%gd %gs"]);
+	if (result.status !== 0) return undefined;
+	const first = (result.stdout.split("\n")[0] ?? "").trim();
+	const [ref, ...subject] = first.split(/\s+/);
+	// Git names the rebase autostash entry exactly "autostash"; a user stash
+	// ("WIP on …", "On …: message") must never be popped by abort.
+	return ref && subject.join(" ") === "autostash" ? ref : undefined;
+}
+
+/** Commit SHA of the autostash entry (subject exactly "autostash"), if any. */
+export function currentAutostashSha(mountRoot: string): string | undefined {
+	const result = runGit(mountRoot, ["stash", "list", "--format=%H %gs"]);
+	if (result.status !== 0) return undefined;
+	for (const line of result.stdout.split("\n")) {
+		const [sha, ...subject] = line.trim().split(/\s+/);
+		if (sha && subject.join(" ") === "autostash") return sha;
+	}
+	return undefined;
 }
 
 /**
@@ -119,7 +151,7 @@ function topStashIsAutostash(mountRoot: string): boolean {
  *   restores the autostash automatically),
  * - completed pull with a conflicted autostash apply (git exits 0 but leaves
  *   unmerged paths): reset to the recorded pre-operation HEAD and re-apply
- *   the autostash so the local draft is back in the working tree.
+ *   the recorded autostash so the local draft is back in the working tree.
  */
 export function abortConflict(mountRoot: string): void {
 	const operation = gitOperationInProgress(mountRoot);
@@ -130,9 +162,22 @@ export function abortConflict(mountRoot: string): void {
 	} else if (gitUnmergedPaths(mountRoot).length > 0) {
 		const recorded = readConflictState(mountRoot);
 		const target = recorded?.preOperationHead;
+		// conflict.json is local and gitignored, but never feed an unvalidated
+		// value into `reset --hard`: a tampered file must fail loudly instead
+		// of silently rewinding the branch.
+		if (target !== undefined && !COMMIT_SHA_RE.test(target)) {
+			throw new RepositoryDbError(
+				"invalid_conflict_state",
+				`recorded preOperationHead has unexpected format (${target}); inspect ${conflictPath(mountRoot)} manually`,
+			);
+		}
 		runGitOrThrow(mountRoot, ["reset", "--hard", target ?? "HEAD"]);
-		if (topStashIsAutostash(mountRoot)) {
-			const pop = runGit(mountRoot, ["stash", "pop"]);
+
+		const stashRef = recorded?.autostashSha
+			? findStashRefBySha(mountRoot, recorded.autostashSha)
+			: topAutostashRef(mountRoot);
+		if (stashRef) {
+			const pop = runGit(mountRoot, ["stash", "pop", stashRef]);
 			if (pop.status !== 0) {
 				throw new RepositoryDbError(
 					"abort_incomplete",
@@ -140,6 +185,12 @@ export function abortConflict(mountRoot: string): void {
 						`it remains available via 'git stash' in ${mountRoot}: ${pop.stderr.trim()}`,
 				);
 			}
+		} else if (recorded?.autostashSha) {
+			throw new RepositoryDbError(
+				"abort_incomplete",
+				`conflict aborted, but the recorded autostash ${recorded.autostashSha} was not found in 'git stash list'; ` +
+					`inspect the stash in ${mountRoot} manually`,
+			);
 		}
 	}
 	rmSync(conflictPath(mountRoot), { force: true });

@@ -124,6 +124,8 @@ export interface ConflictState {
 	handoff: string;
 	/** HEAD commit before the failed operation; used by safe abort/recovery. */
 	preOperationHead?: string;
+	/** Commit of the autostash holding the local draft, when one exists. */
+	autostashSha?: string;
 }
 
 export class RepositoryDbError extends Error {

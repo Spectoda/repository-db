@@ -89,6 +89,34 @@ describe("git boundary guard", () => {
 		}
 	});
 
+	test("refuses option-injection shaped remotes and branches", () => {
+		expect(() =>
+			parseRepositoryDbConfig(
+				fixtureConfigValue("--upload-pack=/tmp/evil", "v3"),
+			),
+		).toThrow(/must not start with "-"/);
+		expect(() =>
+			parseRepositoryDbConfig(fixtureConfigValue("/tmp/origin.git", "-evil")),
+		).toThrow(/unexpected format/);
+	});
+
+	test("status reports paths with unusual characters verbatim", () => {
+		const fixture = createFixtureRepo();
+		try {
+			const db = RepositoryDb.open(fixture.mountPath);
+			const weirdPath = path.join(
+				fixture.mountPath,
+				"data/things",
+				"weird\tname č.yaml",
+			);
+			writeFileSync(weirdPath, "schemaVersion: thing.v3\nid: weird\nrecord: {}\n", "utf8");
+			const status = db.status();
+			expect(status.dirtyPaths).toContain("data/things/weird\tname č.yaml");
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
 	test("refuses a directory without repository-db.yaml", () => {
 		const fixture = createFixtureRepo();
 		try {

@@ -57,22 +57,38 @@ export function gitRemoteUrl(repoRoot: string, remote = "origin"): string | unde
 	return result.stdout.trim() || undefined;
 }
 
-/** Porcelain dirty paths relative to the repo root (staged, unstaged and untracked). */
-export function gitDirtyPaths(repoRoot: string): string[] {
+/**
+ * Parse NUL-delimited `git status --porcelain -z` output into [xy, path]
+ * pairs. The -z form is used everywhere so paths with tabs, quotes or
+ * non-ASCII characters arrive verbatim instead of C-escaped — the generated
+ * policy check and the conflict detector must never mis-read a path.
+ */
+function gitStatusEntries(repoRoot: string, extraArgs: string[]): Array<[string, string]> {
 	const output = runGitOrThrow(repoRoot, [
 		"status",
-		"--porcelain",
-		"--untracked-files=all",
+		"--porcelain=v1",
+		"-z",
+		...extraArgs,
 	]);
-	return output
-		.split("\n")
-		.filter((line) => line.length > 3)
-		.map((line) => line.slice(3).trim())
-		.map((entry) => {
-			const renamed = entry.split(" -> ");
-			const last = renamed[renamed.length - 1] ?? entry;
-			return last.replace(/^"|"$/g, "");
-		});
+	const tokens = output.split("\0").filter((token) => token.length > 0);
+	const entries: Array<[string, string]> = [];
+	for (let index = 0; index < tokens.length; index += 1) {
+		const token = tokens[index] ?? "";
+		if (token.length < 4) continue;
+		const xy = token.slice(0, 2);
+		const path = token.slice(3);
+		entries.push([xy, path]);
+		// Renames/copies emit the original path as the next NUL token.
+		if (xy.includes("R") || xy.includes("C")) index += 1;
+	}
+	return entries;
+}
+
+/** Porcelain dirty paths relative to the repo root (staged, unstaged and untracked). */
+export function gitDirtyPaths(repoRoot: string): string[] {
+	return gitStatusEntries(repoRoot, ["--untracked-files=all"]).map(
+		([, path]) => path,
+	);
 }
 
 export interface AheadBehind {
@@ -101,15 +117,9 @@ export function gitAheadBehind(repoRoot: string, branch: string): AheadBehind {
  * where git exits 0 but leaves the autostash applied with conflict markers.
  */
 export function gitUnmergedPaths(repoRoot: string): string[] {
-	const output = runGitOrThrow(repoRoot, ["status", "--porcelain"]);
-	return output
-		.split("\n")
-		.filter((line) => line.length > 3)
-		.filter((line) => {
-			const xy = line.slice(0, 2);
-			return xy.includes("U") || xy === "AA" || xy === "DD";
-		})
-		.map((line) => line.slice(3).trim().replace(/^"|"$/g, ""));
+	return gitStatusEntries(repoRoot, [])
+		.filter(([xy]) => xy.includes("U") || xy === "AA" || xy === "DD")
+		.map(([, path]) => path);
 }
 
 /** True when a rebase or merge is in progress inside the repository. */

@@ -81,12 +81,28 @@ export function parseRepositoryDbConfig(raw: unknown): RepositoryDbConfig {
 			`${CONFIG_FILE_NAME}: "validate" must be a list of commands`,
 		);
 	}
+	const remote = expectString(dataRepo.remote, "data_repo.remote");
+	const branch = expectString(dataRepo.branch, "data_repo.branch");
+	// Config values feed git argv (clone/pull/push/rev-list); a crafted value
+	// starting with "-" would be parsed as a git option (option injection).
+	if (remote.startsWith("-")) {
+		throw new RepositoryDbError(
+			"invalid_config",
+			`${CONFIG_FILE_NAME}: data_repo.remote must not start with "-"`,
+		);
+	}
+	if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch)) {
+		throw new RepositoryDbError(
+			"invalid_config",
+			`${CONFIG_FILE_NAME}: data_repo.branch has unexpected format: ${branch}`,
+		);
+	}
 	return {
 		schemaVersion,
 		app: expectString(root.app, "app"),
 		dataRepo: {
-			remote: expectString(dataRepo.remote, "data_repo.remote"),
-			branch: expectString(dataRepo.branch, "data_repo.branch"),
+			remote,
+			branch,
 		},
 		schema: {
 			name: expectString(schema.name, "schema.name"),
