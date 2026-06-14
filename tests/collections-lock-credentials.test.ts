@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { checkCredentials } from "../src/credentials.ts";
 import { acquirePublishLock } from "../src/lock.ts";
 import { parseRepositoryDbConfig } from "../src/config.ts";
 import { RepositoryDb } from "../src/repositoryDb.ts";
@@ -140,6 +141,30 @@ describe("credential preflight", () => {
 			delete process.env.GIT_CONFIG_GLOBAL;
 		if (savedEnv.GIT_CONFIG_SYSTEM === undefined)
 			delete process.env.GIT_CONFIG_SYSTEM;
+	});
+
+	test("non-GitHub HTTPS helper must fill credentials, not merely exist", () => {
+		const root = path.join(os.tmpdir(), `repository-db-credentials-${process.pid}`);
+		rmSync(root, { recursive: true, force: true });
+		mkdirSync(root, { recursive: true });
+		try {
+			const gitConfig = path.join(root, "gitconfig");
+			writeFileSync(
+				gitConfig,
+				'[credential]\n	helper = "!f() { exit 0; }; f"\n',
+				"utf8",
+			);
+			process.env.GIT_CONFIG_GLOBAL = gitConfig;
+			process.env.GIT_CONFIG_SYSTEM = "/dev/null";
+
+			const check = checkCredentials("https://gitlab.com/example/private-data.git");
+
+			expect(check.ok).toBe(false);
+			expect(check.mechanism).toBe("none");
+			expect(check.detail).toMatch(/did not return a non-interactive credential/);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	test("publish fails before any mutation when gh auth is unavailable", () => {
