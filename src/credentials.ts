@@ -44,6 +44,50 @@ function tryRun(cmd: string, args: string[]): { status: number; out: string } {
 	};
 }
 
+function credentialFillInput(remote: string): string | null {
+	try {
+		const url = new URL(remote);
+		if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+		const credentialPath = url.pathname.replace(/^\//, "");
+		return `protocol=${url.protocol.slice(0, -1)}\nhost=${url.host}\npath=${credentialPath}\n\n`;
+	} catch {
+		return null;
+	}
+}
+
+function checkCredentialHelper(remote: string, helperDetail: string): CredentialCheck {
+	const input = credentialFillInput(remote);
+	if (!input) {
+		return {
+			ok: false,
+			mechanism: "none",
+			detail: `git credential.helper is configured (${helperDetail}) but remote is not an HTTP(S) URL repository-db can preflight`,
+		};
+	}
+	const result = spawnSync("git", ["credential", "fill"], {
+		encoding: "utf8",
+		input,
+		env: {
+			...process.env,
+			GIT_TERMINAL_PROMPT: "0",
+			GCM_INTERACTIVE: "Never",
+		},
+	});
+	const stdout = result.stdout ?? "";
+	if ((result.status ?? 1) === 0 && /^username=.+$/m.test(stdout) && /^password=.+$/m.test(stdout)) {
+		return {
+			ok: true,
+			mechanism: "credential-helper",
+			detail: `git credential.helper = ${helperDetail}; credential fill returned a non-interactive credential`,
+		};
+	}
+	return {
+		ok: false,
+		mechanism: "none",
+		detail: `git credential.helper is configured (${helperDetail}) but did not return a non-interactive credential for this remote`,
+	};
+}
+
 export function checkCredentials(remote: string): CredentialCheck {
 	if (isLocalRemote(remote)) {
 		return {
@@ -88,11 +132,7 @@ export function checkCredentials(remote: string): CredentialCheck {
 	}
 	const helper = tryRun("git", ["config", "--get", "credential.helper"]);
 	if (helper.status === 0 && helper.out.trim()) {
-		return {
-			ok: true,
-			mechanism: "credential-helper",
-			detail: `git credential.helper = ${helper.out.trim()}`,
-		};
+		return checkCredentialHelper(remote, helper.out.trim());
 	}
 
 	return {
