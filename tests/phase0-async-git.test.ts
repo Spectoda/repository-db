@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { gitFetchAsync } from "../src/git.ts";
@@ -65,6 +65,56 @@ describe("phase 0: lock-free read-only fetch", () => {
 				release();
 			}
 		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
+	test("pull integrates an already-fetched remote without network pull under the lock", async () => {
+		const fixture = createFixtureRepo();
+		const fakeDir = mkdtempSync(path.join(os.tmpdir(), "phase0-pull-no-network-under-lock-"));
+		const fakeGit = path.join(fakeDir, "git");
+		const logPath = path.join(fakeDir, "git-network.log");
+		const realGit = Bun.which("git");
+		if (!realGit) throw new Error("git binary not found for fake git wrapper test");
+		writeFileSync(
+			fakeGit,
+			`#!/bin/sh
+if [ "$1" = "-C" ] && [ "$2" = "$PHASE0_PULL_ROOT" ]; then
+  case "$3" in
+    fetch|pull) printf '%s\n' "$3" >> "$PHASE0_PULL_GIT_LOG" ;;
+  esac
+fi
+"$PHASE0_REAL_GIT" "$@"
+`,
+			{ encoding: "utf8", mode: 0o755 },
+		);
+		const previousPath = process.env.PATH;
+		const previousRealGit = process.env.PHASE0_REAL_GIT;
+		const previousPullRoot = process.env.PHASE0_PULL_ROOT;
+		const previousPullLog = process.env.PHASE0_PULL_GIT_LOG;
+		try {
+			const db = RepositoryDb.open(fixture.mountPath);
+			const second = cloneFixture(fixture, "second-no-pull-under-lock");
+			writeFixtureDocument(second, "thing-remote", { name: "remote" });
+			git(second, ["add", "--all"]);
+			git(second, ["commit", "--message", "remote change"]);
+			git(second, ["push", "origin", fixture.branch]);
+
+			process.env.PATH = `${fakeDir}${path.delimiter}${previousPath ?? ""}`;
+			process.env.PHASE0_REAL_GIT = realGit;
+			process.env.PHASE0_PULL_ROOT = fixture.mountPath;
+			process.env.PHASE0_PULL_GIT_LOG = logPath;
+
+			const result = await db.pull();
+			expect(result).toEqual({ state: "pulled", behind: 1 });
+			const networkOps = readFileSync(logPath, "utf8").trim().split(/\n+/).filter(Boolean);
+			expect(networkOps).toEqual(["fetch"]);
+		} finally {
+			process.env.PATH = previousPath;
+			process.env.PHASE0_REAL_GIT = previousRealGit;
+			process.env.PHASE0_PULL_ROOT = previousPullRoot;
+			process.env.PHASE0_PULL_GIT_LOG = previousPullLog;
+			rmSync(fakeDir, { recursive: true, force: true });
 			rmSync(fixture.root, { recursive: true, force: true });
 		}
 	});

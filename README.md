@@ -25,8 +25,8 @@ itself depends only on `yaml`.
   writes are plain filesystem operations; nothing commits on keypress.
 - **Publish** — one explicit action turning the current draft batch into a
   single audited commit:
-  `validate → materialize generated → git pull --rebase --autostash →
-  one commit with Repository-Db-* trailers → push`.
+  `validate → materialize generated → rebase already-fetched origin/<branch>
+  with autostash → one commit with Repository-Db-* trailers → push`.
 - **Conflict** — any rebase/merge stop or conflicted autostash apply. The
   engine records a conflict state with an agent handoff and refuses further
   writes and publishes until an explicit `conflict --resolved` or

@@ -21,8 +21,8 @@ Notes:
   --mount defaults to the current working directory. Every command verifies
   the Git boundary (repo root, origin remote, branch) against repository-db.yaml
   before touching anything; commands refuse to run from a parent code repo.
-  Publish = validate -> materialize generated -> pull --rebase --autostash ->
-  one commit with Repository-Db-* trailers -> push.
+  Publish = validate -> materialize generated -> rebase fetched origin/<branch>
+  with autostash -> one commit with Repository-Db-* trailers -> push.
 `;
 
 interface Args {

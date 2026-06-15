@@ -54,8 +54,8 @@ function defaultSubject(
 }
 
 /**
- * Integrate remote changes via `git pull --rebase --autostash` with conflict
- * detection from the repository state. CAUTION: git exits 0 even when
+ * Integrate already-fetched remote changes via `git rebase --autostash` with
+ * conflict detection from the repository state. CAUTION: git exits 0 even when
  * applying the autostash produced conflicts ("Applying autostash resulted in
  * conflicts."), and committing that working tree would persist conflict
  * markers into canonical data — hence the explicit rebase/unmerged checks.
@@ -69,28 +69,27 @@ async function integrateRemoteChanges(
 	operation: "publish" | "pull",
 ): Promise<void> {
 	const headBefore = gitHeadCommit(mountRoot);
-	const pull = await runGitAsync(mountRoot, [
-		"pull",
-		"--rebase",
+	const remoteRef = `refs/remotes/origin/${config.dataRepo.branch}`;
+	const rebase = await runGitAsync(mountRoot, [
+		"rebase",
 		"--autostash",
-		"origin",
-		config.dataRepo.branch,
+		remoteRef,
 	]);
 	const midOperation = gitOperationInProgress(mountRoot);
 	const unmerged = gitUnmergedPaths(mountRoot);
-	if (pull.status !== 0 || midOperation || unmerged.length > 0) {
+	if (rebase.status !== 0 || midOperation || unmerged.length > 0) {
 		const state = writeConflictState(mountRoot, {
 			detectedAt: new Date().toISOString(),
-			operation: `${operation}:pull--rebase--autostash`,
+			operation: `${operation}:rebase--autostash-fetched-remote`,
 			gitState:
 				[
 					midOperation ? `in-progress: ${midOperation}` : undefined,
 					unmerged.length > 0 ? `unmerged: ${unmerged.join(", ")}` : undefined,
-					pull.stderr.trim() || pull.stdout.trim(),
+					rebase.stderr.trim() || rebase.stdout.trim(),
 				]
 					.filter(Boolean)
 					.join("\n") || "unknown",
-			message: `${operation} stopped: conflict while integrating remote changes (pull --rebase --autostash)`,
+			message: `${operation} stopped: conflict while integrating fetched remote changes (rebase --autostash ${remoteRef})`,
 			preOperationHead: headBefore,
 			autostashSha: currentAutostashSha(mountRoot),
 		});
@@ -150,8 +149,9 @@ export async function pullRemote(
  *
  *   boundary guard -> conflict guard -> credential preflight -> lock ->
  *   validate -> materialize generated -> generated policy check ->
- *   git pull --rebase --autostash -> git add (data, declared generated,
- *   scripts, config) -> single commit with deterministic trailers -> push.
+ *   rebase against the already-fetched origin/<branch> with autostash -> git add
+ *   (data, declared generated, scripts, config) -> single commit with
+ *   deterministic trailers -> push.
  *
  * A rebase conflict stops the flow, records a conflict state with an agent
  * handoff and blocks further writes until explicit resolve/abort. The
@@ -174,6 +174,11 @@ export async function publish(
 	assertDataRepoBoundary(mountRoot, config);
 	assertNoActiveConflict(mountRoot);
 	assertCredentials(config.dataRepo.remote);
+
+	// Refresh origin/<branch> before taking the publish lock. The locked section
+	// rebases against this already-fetched ref, so no read-only network fetch is
+	// hidden inside the publish-lock window.
+	await gitFetchAsync(mountRoot);
 
 	const releaseLock = acquirePublishLock(mountRoot);
 	try {
@@ -252,7 +257,7 @@ export async function publish(
 		]);
 		if (push.status !== 0) {
 			// Not a conflict: the batch is committed locally and the next
-			// publish retries pull --rebase + push. Writes stay allowed.
+			// publish retries fetched-remote rebase + push. Writes stay allowed.
 			throw new RepositoryDbError(
 				"publish_push_failed",
 				`git push failed; the publish batch stays local (committed_not_pushed). ` +

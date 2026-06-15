@@ -194,8 +194,8 @@ export function gitAheadBehind(repoRoot: string, branch: string): AheadBehind {
 
 /**
  * Paths with unresolved merge conflicts (porcelain XY containing U, or
- * AA/DD). Crucially this also catches the `pull --rebase --autostash` case
- * where git exits 0 but leaves the autostash applied with conflict markers.
+ * AA/DD). Crucially this also catches the autostash-rebase case where git exits
+ * 0 but leaves the autostash applied with conflict markers.
  */
 export function gitUnmergedPaths(repoRoot: string): string[] {
 	return gitStatusEntries(repoRoot, [])
