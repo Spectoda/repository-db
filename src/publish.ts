@@ -9,11 +9,11 @@ import { assertCredentials } from "./credentials.ts";
 import {
 	gitAheadBehind,
 	gitDirtyPaths,
-	gitFetch,
+	gitFetchAsync,
 	gitHeadCommit,
 	gitOperationInProgress,
 	gitUnmergedPaths,
-	runGit,
+	runGitAsync,
 	runGitOrThrow,
 } from "./git.ts";
 import {
@@ -63,13 +63,13 @@ function defaultSubject(
  * further writes are blocked and a {@link RepositoryDbError} is thrown.
  * The caller must hold the publish lock.
  */
-function integrateRemoteChanges(
+async function integrateRemoteChanges(
 	mountRoot: string,
 	config: RepositoryDbConfig,
 	operation: "publish" | "pull",
-): void {
+): Promise<void> {
 	const headBefore = gitHeadCommit(mountRoot);
-	const pull = runGit(mountRoot, [
+	const pull = await runGitAsync(mountRoot, [
 		"pull",
 		"--rebase",
 		"--autostash",
@@ -112,23 +112,33 @@ export interface PullResult {
  * local draft via the autostash machinery (same conflict-safe path the
  * publish flow uses). Intended for the app's automatic background pull, so
  * remote publishes from other machines appear locally without manual git
- * work. Takes the publish lock for mutual exclusion with a running publish.
+ * work.
+ *
+ * The read-only fetch + ahead/behind probe runs lock-free so a coordinator's
+ * background poll never trips `PublishLockedError` against a running publish.
+ * The publish lock is taken only around the actual integration (when there
+ * are remote commits to rebase in).
  */
-export function pullRemote(
+export async function pullRemote(
 	mountRoot: string,
 	config: RepositoryDbConfig,
-): PullResult {
+): Promise<PullResult> {
 	assertDataRepoBoundary(mountRoot, config);
 	assertNoActiveConflict(mountRoot);
 
+	await gitFetchAsync(mountRoot);
+	const { behind } = gitAheadBehind(mountRoot, config.dataRepo.branch);
+	if (behind === 0) {
+		return { state: "up_to_date", behind: 0 };
+	}
+
 	const releaseLock = acquirePublishLock(mountRoot);
 	try {
-		gitFetch(mountRoot);
-		const { behind } = gitAheadBehind(mountRoot, config.dataRepo.branch);
-		if (behind === 0) {
-			return { state: "up_to_date", behind: 0 };
-		}
-		integrateRemoteChanges(mountRoot, config, "pull");
+		// A publish can finish with a recorded conflict after our lock-free fetch
+		// but before this integration section starts. Re-check under the lock so
+		// an auto-pull never integrates on top of an active conflict lane.
+		assertNoActiveConflict(mountRoot);
+		await integrateRemoteChanges(mountRoot, config, "pull");
 		return { state: "pulled", behind };
 	} finally {
 		releaseLock();
@@ -149,11 +159,11 @@ export function pullRemote(
  * only replace `options.summary` upstream after explicit opt-in and never
  * touches the trailers.
  */
-export function publish(
+export async function publish(
 	mountRoot: string,
 	config: RepositoryDbConfig,
 	options: PublishOptions,
-): PublishResult {
+): Promise<PublishResult> {
 	if (!options.actor?.trim()) {
 		throw new RepositoryDbError("invalid_publish", "publish requires an actor");
 	}
@@ -183,7 +193,7 @@ export function publish(
 			// (or a conflict was resolved into a local commit). Just push.
 			const { ahead } = gitAheadBehind(mountRoot, config.dataRepo.branch);
 			if (ahead > 0) {
-				const pushOnly = runGit(mountRoot, [
+				const pushOnly = await runGitAsync(mountRoot, [
 					"push",
 					"origin",
 					`${config.dataRepo.branch}:${config.dataRepo.branch}`,
@@ -204,7 +214,7 @@ export function publish(
 		}
 
 		// Integrate remote changes before committing the local batch.
-		integrateRemoteChanges(mountRoot, config, "publish");
+		await integrateRemoteChanges(mountRoot, config, "publish");
 
 		// Stage the whole batch. ENGINE_DIR is gitignored in the data repo;
 		// undeclared generated diffs were already refused above.
@@ -235,7 +245,7 @@ export function publish(
 		);
 		runGitOrThrow(mountRoot, ["commit", "--message", message]);
 
-		const push = runGit(mountRoot, [
+		const push = await runGitAsync(mountRoot, [
 			"push",
 			"origin",
 			`${config.dataRepo.branch}:${config.dataRepo.branch}`,

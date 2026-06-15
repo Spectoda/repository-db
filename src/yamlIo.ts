@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import YAML from "yaml";
 
@@ -26,12 +27,22 @@ export function readYamlFile(filePath: string): unknown {
 }
 
 /**
- * Atomic file write: write to a sibling temp file, then rename over the
- * target so concurrent readers never observe a half-written document.
+ * Sibling temp path for an atomic write. The name carries both the pid and a
+ * random UUID so two concurrent writes to the same target — even from the same
+ * process — never share a temp file and cannot tear each other's rename.
+ */
+export function atomicTempPath(filePath: string): string {
+	return `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+}
+
+/**
+ * Atomic file write: write to a unique sibling temp file, then rename over the
+ * target so concurrent readers never observe a half-written document and
+ * concurrent writers never collide on the temp file.
  */
 export function writeFileAtomic(filePath: string, content: string): void {
 	mkdirSync(path.dirname(filePath), { recursive: true });
-	const tempPath = `${filePath}.${process.pid}.tmp`;
+	const tempPath = atomicTempPath(filePath);
 	writeFileSync(tempPath, content, "utf8");
 	renameSync(tempPath, filePath);
 }

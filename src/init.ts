@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { CONFIG_FILE_NAME, CONFIG_SCHEMA_VERSION, configToYamlValue } from "./config.ts";
 import { assertCredentials } from "./credentials.ts";
-import { runGit, runGitOrThrow } from "./git.ts";
+import { runGit, runGitAsync, runGitOrThrow } from "./git.ts";
 import { ENGINE_DIR } from "./lock.ts";
 import { writeFileAtomic, toStableYaml } from "./yamlIo.ts";
 import {
@@ -106,7 +106,7 @@ export interface InitResult {
  * - On a non-empty repository, verifies the checkout matches the expected
  *   branch and config.
  */
-export function initDataRepo(options: InitOptions): InitResult {
+export async function initDataRepo(options: InitOptions): Promise<InitResult> {
 	const mountPath = path.resolve(options.mountPath);
 	assertSafeRemote(options.remote);
 	assertSafeBranch(options.branch);
@@ -147,7 +147,7 @@ export function initDataRepo(options: InitOptions): InitResult {
 		mkdirSync(path.dirname(mountPath), { recursive: true });
 		// `--` prevents option injection through a crafted remote URL
 		// (CVE-2018-17456 family); library callers bypass the CLI flag guard.
-		const clone = runGit(path.dirname(mountPath), [
+		const clone = await runGitAsync(path.dirname(mountPath), [
 			"clone",
 			"--",
 			options.remote,
@@ -201,12 +201,18 @@ export function initDataRepo(options: InitOptions): InitResult {
 			"--message",
 			`${options.app}-data: bootstrap repository-db structure (branch ${options.branch})`,
 		]);
-		runGitOrThrow(mountPath, [
+		const push = await runGitAsync(mountPath, [
 			"push",
 			"--set-upstream",
 			"origin",
 			options.branch,
 		]);
+		if (push.status !== 0) {
+			throw new RepositoryDbError(
+				"bootstrap_push_failed",
+				`git push --set-upstream origin ${options.branch} failed: ${push.stderr.trim() || push.stdout.trim()}`,
+			);
+		}
 		bootstrapped = true;
 
 		// Make the generation branch the default branch on GitHub remotes so

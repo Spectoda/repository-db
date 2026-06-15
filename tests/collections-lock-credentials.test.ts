@@ -167,7 +167,7 @@ describe("credential preflight", () => {
 		}
 	});
 
-	test("publish fails before any mutation when gh auth is unavailable", () => {
+	test("publish fails before any mutation when gh auth is unavailable", async () => {
 		const fixture = createFixtureRepo();
 		try {
 			// Point the config at a GitHub-https remote so the gh preflight
@@ -200,9 +200,9 @@ describe("credential preflight", () => {
 			);
 			void config;
 
-			expect(() =>
+			await expect(
 				db.publish({ actor: "a <a@a>", source: "test" }),
-			).toThrow(/credential preflight failed/);
+			).rejects.toThrow(/credential preflight failed/);
 
 			// Nothing was committed or modified by the failed preflight.
 			const headAfter = git(fixture.mountPath, ["rev-parse", "HEAD"]).trim();
