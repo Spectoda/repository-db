@@ -7,10 +7,14 @@ import {
 	markConflictResolved,
 } from "./conflict.ts";
 import { loadRepositoryDbConfig } from "./config.ts";
-import { gitFetch } from "./git.ts";
+import { gitFetchAsync } from "./git.ts";
 import { runValidateCommands } from "./generated.ts";
 import { publish, pullRemote, type PullResult } from "./publish.ts";
-import { deriveSyncStatus, type StatusOptions } from "./status.ts";
+import {
+	deriveSyncStatus,
+	deriveSyncStatusAsync,
+	type StatusOptions,
+} from "./status.ts";
 import type {
 	ConflictState,
 	PublishOptions,
@@ -47,13 +51,19 @@ export class RepositoryDb {
 		return new Collection<T>(this.mountRoot, this.config, name, options);
 	}
 
-	status(options: StatusOptions = {}): SyncStatus {
-		return deriveSyncStatus(this.mountRoot, this.config, options);
+	/** Local sync state (no network). Use {@link statusAsync} for a fresh `behind`. */
+	status(): SyncStatus {
+		return deriveSyncStatus(this.mountRoot, this.config);
 	}
 
-	fetch(): void {
+	/** Sync state, optionally running an async `git fetch` first. */
+	statusAsync(options: StatusOptions = {}): Promise<SyncStatus> {
+		return deriveSyncStatusAsync(this.mountRoot, this.config, options);
+	}
+
+	async fetchAsync(): Promise<void> {
 		assertDataRepoBoundary(this.mountRoot, this.config);
-		gitFetch(this.mountRoot);
+		await gitFetchAsync(this.mountRoot);
 	}
 
 	validate(): string[] {
@@ -61,12 +71,12 @@ export class RepositoryDb {
 		return runValidateCommands(this.mountRoot, this.config);
 	}
 
-	publish(options: PublishOptions): PublishResult {
+	publish(options: PublishOptions): Promise<PublishResult> {
 		return publish(this.mountRoot, this.config, options);
 	}
 
 	/** Fetch + integrate remote changes (autostash-safe, conflict-guarded). */
-	pull(): PullResult {
+	pull(): Promise<PullResult> {
 		return pullRemote(this.mountRoot, this.config);
 	}
 

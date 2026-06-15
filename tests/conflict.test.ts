@@ -26,7 +26,7 @@ function seedAndDivergeRemote(
 }
 
 describe("conflict handling", () => {
-	test("conflicted autostash apply (git exit 0) is detected, blocks writes and aborts cleanly", () => {
+	test("conflicted autostash apply (git exit 0) is detected, blocks writes and aborts cleanly", async () => {
 		const fixture = createFixtureRepo();
 		try {
 			const db = RepositoryDb.open(fixture.mountPath);
@@ -34,9 +34,9 @@ describe("conflict handling", () => {
 			// Local uncommitted draft on the same document.
 			writeFixtureDocument(fixture.mountPath, "thing-1", { name: "local-version" });
 
-			expect(() =>
+			await expect(
 				db.publish({ actor: "a <a@a>", source: "test" }),
-			).toThrow(/publish stopped: conflict/);
+			).rejects.toThrow(/publish stopped: conflict/);
 
 			// Conflict state exists and is surfaced by status.
 			const conflict = db.conflict();
@@ -58,9 +58,9 @@ describe("conflict handling", () => {
 			expect(() => things.put("thing-9", { name: "blocked" })).toThrow(
 				/conflict/i,
 			);
-			expect(() =>
+			await expect(
 				db.publish({ actor: "a <a@a>", source: "test" }),
-			).toThrow(/conflict/i);
+			).rejects.toThrow(/conflict/i);
 
 			// Abort restores the pre-publish state: draft back in the tree.
 			db.abortConflict();
@@ -83,15 +83,15 @@ describe("conflict handling", () => {
 		}
 	});
 
-	test("autostash conflict can be resolved manually and republished", () => {
+	test("autostash conflict can be resolved manually and republished", async () => {
 		const fixture = createFixtureRepo();
 		try {
 			const db = RepositoryDb.open(fixture.mountPath);
 			seedAndDivergeRemote(fixture);
 			writeFixtureDocument(fixture.mountPath, "thing-1", { name: "local-version" });
-			expect(() =>
+			await expect(
 				db.publish({ actor: "a <a@a>", source: "test" }),
-			).toThrow(/publish stopped: conflict/);
+			).rejects.toThrow(/publish stopped: conflict/);
 
 			// markConflictResolved refuses while conflict markers remain.
 			expect(() => db.markConflictResolved()).toThrow(/unresolved conflict markers/);
@@ -102,9 +102,9 @@ describe("conflict handling", () => {
 			db.markConflictResolved();
 			expect(db.conflict()).toBeUndefined();
 
-			const result = db.publish({ actor: "a <a@a>", source: "test" });
+			const result = await db.publish({ actor: "a <a@a>", source: "test" });
 			expect(result.state).toBe("published");
-			const status = db.status({ fetch: true });
+			const status = await db.statusAsync({ fetch: true });
 			expect(status.state).toBe("published");
 			expect(status.behind).toBe(0);
 			const published = git(fixture.mountPath, [
@@ -117,7 +117,7 @@ describe("conflict handling", () => {
 		}
 	});
 
-	test("abort pops the recorded autostash and never touches a user stash", () => {
+	test("abort pops the recorded autostash and never touches a user stash", async () => {
 		const fixture = createFixtureRepo();
 		try {
 			const db = RepositoryDb.open(fixture.mountPath);
@@ -134,9 +134,9 @@ describe("conflict handling", () => {
 
 			seedAndDivergeRemote(fixture);
 			writeFixtureDocument(fixture.mountPath, "thing-1", { name: "local-version" });
-			expect(() =>
+			await expect(
 				db.publish({ actor: "a <a@a>", source: "test" }),
-			).toThrow(/publish stopped: conflict/);
+			).rejects.toThrow(/publish stopped: conflict/);
 
 			// Conflict state recorded the autostash commit for deterministic abort.
 			const state = JSON.parse(
@@ -161,15 +161,15 @@ describe("conflict handling", () => {
 		}
 	});
 
-	test("abort refuses a tampered preOperationHead instead of resetting blindly", () => {
+	test("abort refuses a tampered preOperationHead instead of resetting blindly", async () => {
 		const fixture = createFixtureRepo();
 		try {
 			const db = RepositoryDb.open(fixture.mountPath);
 			seedAndDivergeRemote(fixture);
 			writeFixtureDocument(fixture.mountPath, "thing-1", { name: "local-version" });
-			expect(() =>
+			await expect(
 				db.publish({ actor: "a <a@a>", source: "test" }),
-			).toThrow(/publish stopped: conflict/);
+			).rejects.toThrow(/publish stopped: conflict/);
 
 			const conflictFile = path.join(
 				fixture.mountPath,
@@ -186,7 +186,7 @@ describe("conflict handling", () => {
 		}
 	});
 
-	test("mid-rebase conflict on committed local changes stops publish and rebase --abort recovers", () => {
+	test("mid-rebase conflict on committed local changes stops publish and rebase --abort recovers", async () => {
 		const fixture = createFixtureRepo();
 		try {
 			const db = RepositoryDb.open(fixture.mountPath);
@@ -198,9 +198,9 @@ describe("conflict handling", () => {
 			// Plus a fresh draft so publish takes the full path.
 			writeFixtureDocument(fixture.mountPath, "thing-2", { name: "draft" });
 
-			expect(() =>
+			await expect(
 				db.publish({ actor: "a <a@a>", source: "test" }),
-			).toThrow(/publish stopped: conflict/);
+			).rejects.toThrow(/publish stopped: conflict/);
 			expect(db.status().state).toBe("conflict");
 
 			db.abortConflict();

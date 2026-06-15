@@ -4,7 +4,7 @@ import {
 	gitAheadBehind,
 	gitCurrentBranch,
 	gitDirtyPaths,
-	gitFetch,
+	gitFetchAsync,
 } from "./git.ts";
 import { ENGINE_DIR } from "./lock.ts";
 import type { RepositoryDbConfig, SyncStatus } from "./types.ts";
@@ -14,26 +14,12 @@ export interface StatusOptions {
 	fetch?: boolean;
 }
 
-/**
- * Derive the user-facing sync state of a data checkout.
- *
- * Priority: conflict > draft > committed_not_pushed > pull_needed > published.
- * The individual flags stay available so a UI can show combined situations
- * (e.g. local draft while remote changes are waiting).
- */
-export function deriveSyncStatus(
+/** Local-only status read (no network); shared by the sync and async paths. */
+function computeSyncStatus(
 	mountRoot: string,
 	config: RepositoryDbConfig,
-	options: StatusOptions = {},
+	fetched: boolean,
 ): SyncStatus {
-	assertDataRepoBoundary(mountRoot, config);
-
-	let fetched = false;
-	if (options.fetch) {
-		gitFetch(mountRoot);
-		fetched = true;
-	}
-
 	const conflict = activeConflict(mountRoot);
 	const branch = gitCurrentBranch(mountRoot);
 	const dirtyPaths = gitDirtyPaths(mountRoot).filter(
@@ -60,4 +46,39 @@ export function deriveSyncStatus(
 		conflict: Boolean(conflict),
 		fetched,
 	};
+}
+
+/**
+ * Local sync state of a data checkout, read from the working tree without any
+ * network. Use {@link deriveSyncStatusAsync} when a fresh `behind` count is
+ * needed — `git fetch` is a network op and must not block the event loop.
+ *
+ * Priority: conflict > draft > committed_not_pushed > pull_needed > published.
+ */
+export function deriveSyncStatus(
+	mountRoot: string,
+	config: RepositoryDbConfig,
+): SyncStatus {
+	assertDataRepoBoundary(mountRoot, config);
+	return computeSyncStatus(mountRoot, config, false);
+}
+
+/**
+ * Same as {@link deriveSyncStatus} but optionally runs an async `git fetch`
+ * first so `behind` reflects the actual remote.
+ */
+export async function deriveSyncStatusAsync(
+	mountRoot: string,
+	config: RepositoryDbConfig,
+	options: StatusOptions = {},
+): Promise<SyncStatus> {
+	assertDataRepoBoundary(mountRoot, config);
+
+	let fetched = false;
+	if (options.fetch) {
+		await gitFetchAsync(mountRoot);
+		fetched = true;
+	}
+
+	return computeSyncStatus(mountRoot, config, fetched);
 }

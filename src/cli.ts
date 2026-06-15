@@ -21,8 +21,8 @@ Notes:
   --mount defaults to the current working directory. Every command verifies
   the Git boundary (repo root, origin remote, branch) against repository-db.yaml
   before touching anything; commands refuse to run from a parent code repo.
-  Publish = validate -> materialize generated -> pull --rebase --autostash ->
-  one commit with Repository-Db-* trailers -> push.
+  Publish = validate -> materialize generated -> rebase fetched origin/<branch>
+  with autostash -> one commit with Repository-Db-* trailers -> push.
 `;
 
 interface Args {
@@ -85,7 +85,7 @@ function emit(args: Args, value: unknown, human: () => string): void {
 	}
 }
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
 	const args = parseArgs(argv);
 	switch (args.command) {
 		case "help":
@@ -95,7 +95,7 @@ function main(argv: string[]): number {
 			return 0;
 		}
 		case "init": {
-			const result = initDataRepo({
+			const result = await initDataRepo({
 				app: requireFlag(args, "app"),
 				remote: requireFlag(args, "remote"),
 				branch: requireFlag(args, "branch"),
@@ -118,7 +118,10 @@ function main(argv: string[]): number {
 		}
 		case "status": {
 			const db = RepositoryDb.open(mountPath(args));
-			const status = db.status({ fetch: args.flags.get("fetch") === true });
+			const status =
+				args.flags.get("fetch") === true
+					? await db.statusAsync({ fetch: true })
+					: db.status();
 			emit(args, status, () =>
 				[
 					`state: ${status.state}`,
@@ -144,7 +147,7 @@ function main(argv: string[]): number {
 		case "sync": {
 			const db = RepositoryDb.open(mountPath(args));
 			if (args.flags.get("pull") === true) {
-				const pulled = db.pull();
+				const pulled = await db.pull();
 				const status = db.status();
 				emit(args, { pulled, status }, () =>
 					[
@@ -156,7 +159,7 @@ function main(argv: string[]): number {
 				);
 				return 0;
 			}
-			const status = db.status({ fetch: true });
+			const status = await db.statusAsync({ fetch: true });
 			emit(args, status, () =>
 				[
 					`fetched origin; state: ${status.state}`,
@@ -170,7 +173,7 @@ function main(argv: string[]): number {
 		}
 		case "publish": {
 			const db = RepositoryDb.open(mountPath(args));
-			const result = db.publish({
+			const result = await db.publish({
 				actor: requireFlag(args, "actor"),
 				source: requireFlag(args, "source"),
 				summary:
@@ -214,12 +217,12 @@ function main(argv: string[]): number {
 	}
 }
 
-try {
-	process.exit(main(process.argv.slice(2)));
-} catch (error) {
-	if (error instanceof RepositoryDbError) {
-		console.error(`repository-db error [${error.code}]: ${error.message}`);
-		process.exit(2);
-	}
-	throw error;
-}
+main(process.argv.slice(2))
+	.then((code) => process.exit(code))
+	.catch((error) => {
+		if (error instanceof RepositoryDbError) {
+			console.error(`repository-db error [${error.code}]: ${error.message}`);
+			process.exit(2);
+		}
+		throw error;
+	});

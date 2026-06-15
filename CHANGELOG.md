@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — DEV-6370 phase 0
+
+- Network git ops (`clone`, `fetch`, `push`, bootstrap `push --set-upstream`)
+  now run via an
+  async runner (`runGitAsync` / `gitFetchAsync`) with an explicit
+  `git_timeout` error instead of blocking the host event loop forever.
+- Remote integration no longer shells out to `git pull` inside the publish lock:
+  `pullRemote` fetches lock-free, then the locked section rebases against the
+  already-fetched `origin/<branch>` ref.
+  Local plumbing (status, rev-parse, add, commit, …) stays synchronous.
+- `RepositoryDb.publish()` and `.pull()` are now async (return Promises);
+  `initDataRepo()` is async because clone/bootstrap push are network-backed;
+  `RepositoryDb.fetch()` is now `fetchAsync()`. Status splits into a local-only
+  sync `status()` and an async `statusAsync({ fetch })` that may run a network
+  fetch first. `deriveSyncStatus` no longer fetches; use `deriveSyncStatusAsync`.
+- `pullRemote` runs its read-only fetch + ahead/behind probe lock-free and only
+  takes the publish lock around the actual integration. A coordinator's
+  background poll therefore never trips `PublishLockedError` against a running
+  publish.
+- `writeFileAtomic` temp files now carry a per-write random UUID
+  (`atomicTempPath`), not just the pid, so two concurrent writes to the same
+  path never share a temp file.
+- The `repository-db` CLI runs its command pipeline asynchronously to await the
+  network paths above.
+
 ## 0.2.0 — 20260610.2
 
 - New public `pullRemote` / `RepositoryDb.pull()` / `repository-db sync
@@ -20,10 +45,10 @@
   serialization, atomic writes, zod-compatible parser injection).
 - Sync status model: conflict / draft / committed_not_pushed / pull_needed /
   published, remote detection via `git fetch` without webhooks.
-- Publish flow: validate → materialize generated → `git pull --rebase
-  --autostash` → single commit with parser-validated `Repository-Db-*`
-  trailers → push; lock-file mutual exclusion; push-only recovery for
-  committed-not-pushed states.
+- Publish flow: validate → materialize generated → `git rebase --autostash`
+  against the already-fetched `origin/<branch>` → single commit with
+  parser-validated `Repository-Db-*` trailers → push; lock-file mutual
+  exclusion; push-only recovery for committed_not_pushed.
 - Conflict safety: detects mid-rebase stops and conflicted autostash applies
   (git exits 0 there), records a conflict state with an agent handoff, blocks
   writes until explicit `conflict --resolved` / `conflict --abort`; abort

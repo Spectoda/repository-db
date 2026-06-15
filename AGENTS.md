@@ -23,9 +23,10 @@ obsahu.
 - Publish je jediná cesta, kterou engine commituje a pushuje. Drží lock,
   validate, generated manifest check a deterministické Repository-Db-*
   trailery validované parserem (`src/trailers.ts`).
-- `git pull --rebase --autostash` umí skončit exit 0 a přitom nechat
-  konfliktní markery (conflicted autostash apply). Konflikt se proto detekuje
-  ze stavu repa (rebase dir, unmerged paths), nikdy jen z exit kódu.
+- `git rebase --autostash` nad už načteným `origin/<branch>` umí skončit exit 0
+  a přitom nechat konfliktní markery (conflicted autostash apply). Konflikt se
+  proto detekuje ze stavu repa (rebase dir, unmerged paths), nikdy jen z exit
+  kódu.
 - Při aktivním konfliktu jsou writes i publish blokované do explicitního
   `conflict --resolved` / `conflict --abort`.
 - Credential preflight nikdy nezapisuje credentials; jen ověřuje externí

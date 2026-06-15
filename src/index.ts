@@ -9,8 +9,15 @@ export {
 	configToYamlValue,
 } from "./config.ts";
 export { assertDataRepoBoundary, normalizeRemoteUrl } from "./boundary.ts";
-export { deriveSyncStatus } from "./status.ts";
+export { deriveSyncStatus, deriveSyncStatusAsync } from "./status.ts";
 export type { StatusOptions } from "./status.ts";
+export {
+	runGitAsync,
+	runGitAsyncOrThrow,
+	gitFetchAsync,
+	DEFAULT_GIT_NETWORK_TIMEOUT_MS,
+} from "./git.ts";
+export type { GitResult } from "./git.ts";
 export { publish, pullRemote } from "./publish.ts";
 export type { PullResult } from "./publish.ts";
 export { initDataRepo } from "./init.ts";
@@ -47,6 +54,7 @@ export {
 	toStableJson,
 	parseYaml,
 	readYamlFile,
+	atomicTempPath,
 	writeFileAtomic,
 	writeYamlFileAtomic,
 } from "./yamlIo.ts";

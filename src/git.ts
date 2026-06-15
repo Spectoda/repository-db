@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { RepositoryDbError } from "./types.ts";
 
@@ -8,9 +8,16 @@ export interface GitResult {
 	stderr: string;
 }
 
+/** Default kill-after deadline for network git ops (fetch/pull/push). */
+export const DEFAULT_GIT_NETWORK_TIMEOUT_MS = 60_000;
+
 /**
  * Run git scoped to a repository root. Every engine git call goes through
  * here so the boundary guard can rely on `-C <repoRoot>` being present.
+ *
+ * Synchronous — reserved for fast LOCAL plumbing (status, rev-parse, add,
+ * commit, …). Network ops (fetch/pull/push) must use {@link runGitAsync} so a
+ * slow or hung remote can never block the single-threaded event loop.
  */
 export function runGit(repoRoot: string, args: string[]): GitResult {
 	const result = spawnSync("git", ["-C", repoRoot, ...args], {
@@ -28,6 +35,80 @@ export function runGit(repoRoot: string, args: string[]): GitResult {
 		stdout: result.stdout ?? "",
 		stderr: result.stderr ?? "",
 	};
+}
+
+/**
+ * Async git runner for network ops with an explicit kill-on-timeout deadline.
+ * A non-zero exit resolves with the git status (callers decide); only a spawn
+ * failure or a timeout rejects (`git_unavailable` / `git_timeout`). Never use
+ * for the request path without `await` — that is the whole point of moving
+ * fetch/pull/push off `spawnSync`.
+ */
+export function runGitAsync(
+	repoRoot: string,
+	args: string[],
+	options: { timeoutMs?: number } = {},
+): Promise<GitResult> {
+	const timeoutMs = options.timeoutMs ?? DEFAULT_GIT_NETWORK_TIMEOUT_MS;
+	return new Promise<GitResult>((resolve, reject) => {
+		let timedOut = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const child = execFile(
+			"git",
+			["-C", repoRoot, ...args],
+			{
+				encoding: "utf8",
+				env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+				maxBuffer: 64 * 1024 * 1024,
+			},
+			(error, stdout, stderr) => {
+				if (timer) clearTimeout(timer);
+				if (timedOut) {
+					reject(
+						new RepositoryDbError(
+							"git_timeout",
+							`git ${args.join(" ")} timed out after ${timeoutMs}ms`,
+						),
+					);
+					return;
+				}
+				if (error) {
+					const err = error as NodeJS.ErrnoException;
+					if (typeof err.code === "number") {
+						resolve({ status: err.code, stdout: stdout ?? "", stderr: stderr ?? "" });
+						return;
+					}
+					reject(
+						new RepositoryDbError(
+							"git_unavailable",
+							`git could not be executed: ${error.message}`,
+						),
+					);
+					return;
+				}
+				resolve({ status: 0, stdout: stdout ?? "", stderr: stderr ?? "" });
+			},
+		);
+		timer = setTimeout(() => {
+			timedOut = true;
+			child.kill("SIGTERM");
+		}, timeoutMs);
+	});
+}
+
+export async function runGitAsyncOrThrow(
+	repoRoot: string,
+	args: string[],
+	options: { timeoutMs?: number } = {},
+): Promise<string> {
+	const result = await runGitAsync(repoRoot, args, options);
+	if (result.status !== 0) {
+		throw new RepositoryDbError(
+			"git_failed",
+			`git ${args.join(" ")} failed (${result.status}): ${result.stderr.trim() || result.stdout.trim()}`,
+		);
+	}
+	return result.stdout;
 }
 
 export function runGitOrThrow(repoRoot: string, args: string[]): string {
@@ -113,8 +194,8 @@ export function gitAheadBehind(repoRoot: string, branch: string): AheadBehind {
 
 /**
  * Paths with unresolved merge conflicts (porcelain XY containing U, or
- * AA/DD). Crucially this also catches the `pull --rebase --autostash` case
- * where git exits 0 but leaves the autostash applied with conflict markers.
+ * AA/DD). Crucially this also catches the autostash-rebase case where git exits
+ * 0 but leaves the autostash applied with conflict markers.
  */
 export function gitUnmergedPaths(repoRoot: string): string[] {
 	return gitStatusEntries(repoRoot, [])
@@ -131,8 +212,9 @@ export function gitOperationInProgress(repoRoot: string): string | undefined {
 	return undefined;
 }
 
-export function gitFetch(repoRoot: string): void {
-	runGitOrThrow(repoRoot, ["fetch", "--quiet", "origin"]);
+/** Network fetch via the async runner (kill-on-timeout). */
+export async function gitFetchAsync(repoRoot: string, timeoutMs?: number): Promise<void> {
+	await runGitAsyncOrThrow(repoRoot, ["fetch", "--quiet", "origin"], { timeoutMs });
 }
 
 export function gitHeadCommit(repoRoot: string): string | undefined {

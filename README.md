@@ -25,8 +25,8 @@ itself depends only on `yaml`.
   writes are plain filesystem operations; nothing commits on keypress.
 - **Publish** — one explicit action turning the current draft batch into a
   single audited commit:
-  `validate → materialize generated → git pull --rebase --autostash →
-  one commit with Repository-Db-* trailers → push`.
+  `validate → materialize generated → rebase already-fetched origin/<branch>
+  with autostash → one commit with Repository-Db-* trailers → push`.
 - **Conflict** — any rebase/merge stop or conflicted autostash apply. The
   engine records a conflict state with an agent handoff and refuses further
   writes and publishes until an explicit `conflict --resolved` or
@@ -100,8 +100,8 @@ const deals = db.collection("deals", {
 });
 
 deals.put("deal-123", record);          // local draft (no commit)
-const status = db.status({ fetch: true });
-const result = db.publish({ actor: "Jana <jana@firma.cz>", source: "deals-app-v3" });
+const status = await db.statusAsync({ fetch: true });
+const result = await db.publish({ actor: "Jana <jana@firma.cz>", source: "deals-app-v3" });
 ```
 
 ## Development
