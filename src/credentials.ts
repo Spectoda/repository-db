@@ -44,6 +44,50 @@ function tryRun(cmd: string, args: string[]): { status: number; out: string } {
 	};
 }
 
+function credentialFillInput(remote: string): string | null {
+	try {
+		const url = new URL(remote);
+		if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+		const credentialPath = url.pathname.replace(/^\//, "");
+		return `protocol=${url.protocol.slice(0, -1)}\nhost=${url.host}\npath=${credentialPath}\n\n`;
+	} catch {
+		return null;
+	}
+}
+
+function checkCredentialHelper(remote: string, helperDetail: string): CredentialCheck {
+	const input = credentialFillInput(remote);
+	if (!input) {
+		return {
+			ok: false,
+			mechanism: "none",
+			detail: `git credential.helper is configured (${helperDetail}) but remote is not an HTTP(S) URL repository-db can preflight`,
+		};
+	}
+	const result = spawnSync("git", ["credential", "fill"], {
+		encoding: "utf8",
+		input,
+		env: {
+			...process.env,
+			GIT_TERMINAL_PROMPT: "0",
+			GCM_INTERACTIVE: "Never",
+		},
+	});
+	const stdout = result.stdout ?? "";
+	if ((result.status ?? 1) === 0 && /^username=.+$/m.test(stdout) && /^password=.+$/m.test(stdout)) {
+		return {
+			ok: true,
+			mechanism: "credential-helper",
+			detail: `git credential.helper = ${helperDetail}; credential fill returned a non-interactive credential`,
+		};
+	}
+	return {
+		ok: false,
+		mechanism: "none",
+		detail: `git credential.helper is configured (${helperDetail}) but did not return a non-interactive credential for this remote`,
+	};
+}
+
 export function checkCredentials(remote: string): CredentialCheck {
 	if (isLocalRemote(remote)) {
 		return {
@@ -52,26 +96,10 @@ export function checkCredentials(remote: string): CredentialCheck {
 			detail: "remote is a local path; no credentials required",
 		};
 	}
-	if (!isGithubRemote(remote)) {
-		// Non-GitHub remotes rely on the ambient git credential setup.
-		const helper = tryRun("git", ["config", "--get", "credential.helper"]);
-		if (helper.status === 0 && helper.out.trim()) {
-			return {
-				ok: true,
-				mechanism: "credential-helper",
-				detail: `git credential.helper = ${helper.out.trim()}`,
-			};
-		}
-		return {
-			ok: false,
-			mechanism: "none",
-			detail:
-				"remote is not GitHub and no git credential.helper is configured; configure an approved credential mechanism first",
-		};
-	}
 
-	const gh = tryRun(ghBin(), ["auth", "status"]);
-	if (gh.status === 0) {
+	const isGithub = isGithubRemote(remote);
+	const gh = isGithub ? tryRun(ghBin(), ["auth", "status"]) : null;
+	if (gh?.status === 0) {
 		return { ok: true, mechanism: "gh", detail: "gh auth status: authenticated" };
 	}
 
@@ -86,22 +114,33 @@ export function checkCredentials(remote: string): CredentialCheck {
 			};
 		}
 	}
+
 	const helper = tryRun("git", ["config", "--get", "credential.helper"]);
 	if (helper.status === 0 && helper.out.trim()) {
+		return checkCredentialHelper(remote, helper.out.trim());
+	}
+
+	const fillInput = credentialFillInput(remote);
+	if (fillInput) {
 		return {
-			ok: true,
-			mechanism: "credential-helper",
-			detail: `git credential.helper = ${helper.out.trim()}`,
+			ok: false,
+			mechanism: "none",
+			detail: isGithub
+				? gh?.status === 127
+					? "GitHub CLI (gh) is not installed and no git credential.helper is configured for this HTTP(S) remote"
+					: "GitHub CLI is installed but not authenticated (gh auth login), and no git credential.helper is configured for this HTTP(S) remote"
+				: "HTTP(S) remote has no git credential.helper configured; configure an approved non-interactive credential provider first",
 		};
 	}
 
 	return {
 		ok: false,
 		mechanism: "none",
-		detail:
-			gh.status === 127
+		detail: isGithub
+			? gh?.status === 127
 				? "GitHub CLI (gh) is not installed and no non-interactive credential provider was detected"
-				: "GitHub CLI is installed but not authenticated (gh auth login), and no non-interactive credential provider was detected",
+				: "GitHub CLI is installed but not authenticated (gh auth login), and no non-interactive credential provider was detected"
+			: "remote is not an HTTP(S) URL and no ssh-agent identity or supported non-interactive credential provider was detected",
 	};
 }
 
