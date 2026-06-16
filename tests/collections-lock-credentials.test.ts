@@ -194,6 +194,10 @@ describe("credential preflight", () => {
 			const fakeBinDir = path.join(fixture.root, "fake-bin");
 			mkdirSync(fakeBinDir, { recursive: true });
 			const gitCallLog = path.join(fixture.root, "git-calls.log");
+			const homeDir = path.join(fixture.root, "home");
+			const xdgConfigDir = path.join(fixture.root, "xdg-config");
+			mkdirSync(homeDir, { recursive: true });
+			mkdirSync(xdgConfigDir, { recursive: true });
 			const realGit = spawnSync("sh", ["-c", "command -v git"], {
 				encoding: "utf8",
 			}).stdout.trim();
@@ -204,6 +208,9 @@ describe("credential preflight", () => {
 				[
 					"#!/bin/sh",
 					`printf '%s\\n' \"$*\" >> ${shellQuote(gitCallLog)}`,
+					'if [ "$1" = "config" ] && [ "$2" = "--get" ] && [ "$3" = "credential.helper" ]; then',
+					"  exit 1",
+					"fi",
 					'for arg in "$@"; do',
 					'  if [ "$arg" = "fetch" ]; then',
 					'    echo "unexpected git fetch before credential preflight" >&2',
@@ -238,6 +245,9 @@ describe("credential preflight", () => {
 					REPOSITORY_DB_GH_BIN: fakeFailingGh(fixture.root),
 					GIT_CONFIG_GLOBAL: "/dev/null",
 					GIT_CONFIG_SYSTEM: "/dev/null",
+					GIT_CONFIG_NOSYSTEM: "1",
+					HOME: homeDir,
+					XDG_CONFIG_HOME: xdgConfigDir,
 					GIT_TERMINAL_PROMPT: "0",
 					GCM_INTERACTIVE: "Never",
 				},
