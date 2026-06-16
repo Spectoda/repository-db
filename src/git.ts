@@ -1,6 +1,41 @@
-import { execFile, spawnSync } from "node:child_process";
+import { type ChildProcess, execFile, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { RepositoryDbError } from "./types.ts";
+
+/**
+ * Terminate a timed-out git child: SIGTERM, then escalate to SIGKILL if it is
+ * ignored. The escalation timer is cleared as soon as the child exits, so a
+ * later, reused PID is never signalled.
+ *
+ * Scope note — no process-group / tree kill. The git process itself is killed;
+ * a portable teardown of orphaned transport children (e.g. `ssh`) would need
+ * detached process groups, which the bun runtime this engine targets does NOT
+ * support for `execFile` (a detached child is not made a group leader, so a
+ * negative-pid group kill returns ESRCH). detached would also break Ctrl-C
+ * propagation on Node. In practice a hung `git fetch/push` over ssh tears its
+ * transport down when the git process dies; the prompt rejection in
+ * {@link runGitAsync} is what actually frees the slot. A fully portable
+ * tree-kill is deferred until the runtime supports it.
+ */
+function terminateGitChild(child: ChildProcess): void {
+	if (child.pid === undefined) return;
+	try {
+		child.kill("SIGTERM");
+	} catch {
+		/* already gone */
+	}
+	const escalation = setTimeout(() => {
+		try {
+			child.kill("SIGKILL");
+		} catch {
+			/* already gone */
+		}
+	}, 2000);
+	(escalation as { unref?: () => void }).unref?.();
+	const clearEscalation = () => clearTimeout(escalation);
+	child.once("exit", clearEscalation);
+	child.once("close", clearEscalation);
+}
 
 export interface GitResult {
 	status: number;
@@ -47,14 +82,15 @@ export function runGit(repoRoot: string, args: string[]): GitResult {
 export function runGitAsync(
 	repoRoot: string,
 	args: string[],
-	options: { timeoutMs?: number } = {},
+	options: { timeoutMs?: number; gitBin?: string } = {},
 ): Promise<GitResult> {
 	const timeoutMs = options.timeoutMs ?? DEFAULT_GIT_NETWORK_TIMEOUT_MS;
+	const gitBin = options.gitBin ?? "git";
 	return new Promise<GitResult>((resolve, reject) => {
-		let timedOut = false;
+		let settled = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const child = execFile(
-			"git",
+			gitBin,
 			["-C", repoRoot, ...args],
 			{
 				encoding: "utf8",
@@ -63,15 +99,8 @@ export function runGitAsync(
 			},
 			(error, stdout, stderr) => {
 				if (timer) clearTimeout(timer);
-				if (timedOut) {
-					reject(
-						new RepositoryDbError(
-							"git_timeout",
-							`git ${args.join(" ")} timed out after ${timeoutMs}ms`,
-						),
-					);
-					return;
-				}
+				if (settled) return; // already rejected by the timeout path
+				settled = true;
 				if (error) {
 					const err = error as NodeJS.ErrnoException;
 					if (typeof err.code === "number") {
@@ -90,8 +119,19 @@ export function runGitAsync(
 			},
 		);
 		timer = setTimeout(() => {
-			timedOut = true;
-			child.kill("SIGTERM");
+			if (settled) return;
+			settled = true;
+			// Reject at the deadline and tear down the group immediately. We do
+			// NOT wait for the close callback: an orphaned child can hold the
+			// stdout pipe open, which would otherwise delay the rejection past
+			// timeoutMs (the bug this guards against).
+			terminateGitChild(child);
+			reject(
+				new RepositoryDbError(
+					"git_timeout",
+					`git ${args.join(" ")} timed out after ${timeoutMs}ms`,
+				),
+			);
 		}, timeoutMs);
 	});
 }
@@ -99,7 +139,7 @@ export function runGitAsync(
 export async function runGitAsyncOrThrow(
 	repoRoot: string,
 	args: string[],
-	options: { timeoutMs?: number } = {},
+	options: { timeoutMs?: number; gitBin?: string } = {},
 ): Promise<string> {
 	const result = await runGitAsync(repoRoot, args, options);
 	if (result.status !== 0) {
@@ -213,8 +253,15 @@ export function gitOperationInProgress(repoRoot: string): string | undefined {
 }
 
 /** Network fetch via the async runner (kill-on-timeout). */
-export async function gitFetchAsync(repoRoot: string, timeoutMs?: number): Promise<void> {
-	await runGitAsyncOrThrow(repoRoot, ["fetch", "--quiet", "origin"], { timeoutMs });
+export async function gitFetchAsync(
+	repoRoot: string,
+	timeoutMs?: number,
+	options: { gitBin?: string } = {},
+): Promise<void> {
+	await runGitAsyncOrThrow(repoRoot, ["fetch", "--quiet", "origin"], {
+		timeoutMs,
+		gitBin: options.gitBin,
+	});
 }
 
 export function gitHeadCommit(repoRoot: string): string | undefined {

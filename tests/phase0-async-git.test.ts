@@ -174,28 +174,33 @@ exit "$status"
 });
 
 describe("phase 0: async network git with timeout", () => {
-	test("a slow network git op rejects with a git_timeout error", async () => {
+	test("a slow network git op rejects promptly with git_timeout", async () => {
 		const fakeDir = mkdtempSync(path.join(os.tmpdir(), "phase0-fake-git-"));
-		const fakeGit = path.join(fakeDir, "git");
-		writeFileSync(fakeGit, "#!/bin/sh\nsleep 5\n", { encoding: "utf8", mode: 0o755 });
-		const previousPath = process.env.PATH;
-		process.env.PATH = `${fakeDir}${path.delimiter}${previousPath ?? ""}`;
+		// A fake git that hangs longer than the timeout. The runner must reject at
+		// the deadline (and kill the git process) rather than wait for the close
+		// callback, which an orphaned child holding the pipe would otherwise delay.
+		const fakeGit = path.join(fakeDir, "fake-git");
+		writeFileSync(fakeGit, "#!/bin/sh\nsleep 3\n", { encoding: "utf8", mode: 0o755 });
 		try {
+			const started = performance.now();
 			let code: string | undefined;
-			await gitFetchAsync(fakeDir, 150).catch((error) => {
+			let message = "";
+			try {
+				// Inject the fake git directly — no global process.env.PATH
+				// mutation, so this test can never contaminate sibling tests.
+				await gitFetchAsync(fakeDir, 150, { gitBin: fakeGit });
+				throw new Error("expected gitFetchAsync to time out");
+			} catch (error) {
 				code = (error as { code?: string }).code;
-				throw error;
-			}).then(
-				() => {
-					throw new Error("expected gitFetchAsync to time out");
-				},
-				(error) => {
-					expect(String((error as Error).message)).toMatch(/timed out after 150ms/);
-				},
-			);
+				message = String((error as Error).message);
+			}
+			const elapsed = performance.now() - started;
 			expect(code).toBe("git_timeout");
+			expect(message).toMatch(/timed out after 150ms/);
+			// The deadline must actually interrupt: reject well below the fake
+			// git's 3s hang, proving it does not wait for the close callback.
+			expect(elapsed).toBeLessThan(1500);
 		} finally {
-			process.env.PATH = previousPath;
 			rmSync(fakeDir, { recursive: true, force: true });
 		}
 	});
