@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { checkCredentials } from "../src/credentials.ts";
 import { acquirePublishLock } from "../src/lock.ts";
-import { parseRepositoryDbConfig } from "../src/config.ts";
 import { RepositoryDb } from "../src/repositoryDb.ts";
 import { toStableYaml } from "../src/yamlIo.ts";
 import {
@@ -167,11 +167,12 @@ describe("credential preflight", () => {
 		}
 	});
 
-	test("publish fails before any mutation when gh auth is unavailable", async () => {
+	test("publish fails before any fetch or mutation when gh auth is unavailable", () => {
 		const fixture = createFixtureRepo();
 		try {
-			// Point the config at a GitHub-https remote so the gh preflight
-			// applies, while git operations still talk to the local origin.
+			// Point both config and origin at a GitHub-https remote so a broken
+			// ordering would try a real network fetch. The fake git wrapper below
+			// proves publish stops at credential preflight before fetch/mutation.
 			const configPath = path.join(fixture.mountPath, "repository-db.yaml");
 			writeFileSync(
 				configPath,
@@ -189,20 +190,73 @@ describe("credential preflight", () => {
 			git(fixture.mountPath, ["add", "--all"]);
 			git(fixture.mountPath, ["commit", "--message", "retarget remote"]);
 
-			process.env.REPOSITORY_DB_GH_BIN = fakeFailingGh(fixture.root);
-			process.env.GIT_CONFIG_GLOBAL = "/dev/null";
-			process.env.GIT_CONFIG_SYSTEM = "/dev/null";
-
-			const db = RepositoryDb.open(fixture.mountPath);
 			const headBefore = git(fixture.mountPath, ["rev-parse", "HEAD"]).trim();
-			const config = parseRepositoryDbConfig(
-				fixtureConfigValue("https://github.com/Spectoda/fixture-data.git", fixture.branch),
+			const fakeBinDir = path.join(fixture.root, "fake-bin");
+			mkdirSync(fakeBinDir, { recursive: true });
+			const gitCallLog = path.join(fixture.root, "git-calls.log");
+			const homeDir = path.join(fixture.root, "home");
+			const xdgConfigDir = path.join(fixture.root, "xdg-config");
+			mkdirSync(homeDir, { recursive: true });
+			mkdirSync(xdgConfigDir, { recursive: true });
+			const realGit = spawnSync("sh", ["-c", "command -v git"], {
+				encoding: "utf8",
+			}).stdout.trim();
+			expect(realGit.length).toBeGreaterThan(0);
+			const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+			writeFileSync(
+				path.join(fakeBinDir, "git"),
+				[
+					"#!/bin/sh",
+					`printf '%s\\n' \"$*\" >> ${shellQuote(gitCallLog)}`,
+					'if [ "$1" = "config" ] && [ "$2" = "--get" ] && [ "$3" = "credential.helper" ]; then',
+					"  exit 1",
+					"fi",
+					'for arg in "$@"; do',
+					'  if [ "$arg" = "fetch" ]; then',
+					'    echo "unexpected git fetch before credential preflight" >&2',
+					"    exit 42",
+					"  fi",
+					"done",
+					`exec ${shellQuote(realGit)} "$@"`,
+					"",
+				].join("\n"),
+				{ encoding: "utf8", mode: 0o755 },
 			);
-			void config;
 
-			await expect(
-				db.publish({ actor: "a <a@a>", source: "test" }),
-			).rejects.toThrow(/credential preflight failed/);
+			const childScript = `
+				import { RepositoryDb } from "./src/repositoryDb.ts";
+				const db = RepositoryDb.open(process.argv[1]);
+				try {
+					await db.publish({ actor: "a <a@a>", source: "test" });
+					console.error("publish unexpectedly succeeded");
+					process.exit(10);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					console.log(message);
+					if (!/credential preflight failed/.test(message)) process.exit(11);
+				}
+			`;
+			const publish = spawnSync("bun", ["--eval", childScript, fixture.mountPath], {
+				cwd: process.cwd(),
+				encoding: "utf8",
+				env: {
+					...process.env,
+					PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+					REPOSITORY_DB_GH_BIN: fakeFailingGh(fixture.root),
+					GIT_CONFIG_GLOBAL: "/dev/null",
+					GIT_CONFIG_SYSTEM: "/dev/null",
+					GIT_CONFIG_NOSYSTEM: "1",
+					HOME: homeDir,
+					XDG_CONFIG_HOME: xdgConfigDir,
+					GIT_TERMINAL_PROMPT: "0",
+					GCM_INTERACTIVE: "Never",
+				},
+			});
+
+			expect(`${publish.stdout}${publish.stderr}`).toMatch(/credential preflight failed/);
+			expect(publish.status).toBe(0);
+			const gitCalls = existsSync(gitCallLog) ? readFileSync(gitCallLog, "utf8") : "";
+			expect(gitCalls).not.toMatch(/(^|\s)fetch(\s|$)/);
 
 			// Nothing was committed or modified by the failed preflight.
 			const headAfter = git(fixture.mountPath, ["rev-parse", "HEAD"]).trim();
