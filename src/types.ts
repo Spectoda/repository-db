@@ -3,7 +3,7 @@
  *
  * The engine is intentionally domain-agnostic: it knows about Git, YAML
  * documents, collections, generated read models and the publish lifecycle.
- * Domain schemas (e.g. Deals) are injected by the host application through
+ * Domain schemas are injected by the host application through
  * the {@link DocumentParser} contract, which is structurally compatible with
  * Zod schemas without depending on Zod.
  */
@@ -33,7 +33,7 @@ export interface GeneratedManifestEntry {
 
 export interface RepositoryDbConfig {
 	schemaVersion: string;
-	/** Application name owning this data repo, e.g. `deals`. */
+	/** Application name owning this data repo, e.g. `sample-app`. */
 	app: string;
 	dataRepo: {
 		/** Expected remote URL of the data repository. */
@@ -42,7 +42,7 @@ export interface RepositoryDbConfig {
 		branch: string;
 	};
 	schema: {
-		/** Data-shape contract name, e.g. `deals-data`. */
+		/** Data-shape contract name, e.g. `sample-data`. */
 		name: string;
 		/** Data-shape contract version, e.g. `3.0.0-alpha.0`. */
 		version: string;
@@ -80,6 +80,213 @@ export interface SyncStatus {
 	fetched: boolean;
 }
 
+/**
+ * Current public Review Surface representation contract.
+ *
+ * Persisted review marks should include this value in their invalidation key so
+ * a future incompatible contract can clear stale reviewed state safely.
+ */
+export const REVIEW_SURFACE_CONTRACT_VERSION = "repository-db.review-surface.v1" as const;
+
+/** The coarse file/resource change kinds surfaced by review adapters. */
+export type ResourceChangeKind =
+	| "created"
+	| "modified"
+	| "deleted"
+	| "generated"
+	| "unknown";
+
+/** Where a path reference comes from; paths are technical metadata, not labels. */
+export type ReviewTechnicalReferenceKind =
+	| "canonical_data_path"
+	| "generated_path"
+	| "supporting_path"
+	| "unknown_path";
+
+export interface ReviewTechnicalReference {
+	/** Path relative to the data-repo mount root. Not a primary UI label. */
+	path: string;
+	kind: ReviewTechnicalReferenceKind;
+	/** Optional technical note for developer details or agent handoff. */
+	note?: string;
+}
+
+export interface ReviewRouteTarget {
+	/** Host-app route, URL path, hash or deep link for opening this resource. */
+	href: string;
+	/** Optional action label, e.g. "Open" translated by the host app. */
+	label?: string;
+	/** Stable route params when the host router separates route name from params. */
+	params?: Record<string, string>;
+	/** Extra non-secret routing context for the host app. */
+	context?: Record<string, unknown>;
+}
+
+export type ReviewFieldChangeKind =
+	| "created"
+	| "modified"
+	| "deleted"
+	| "unchanged"
+	| "unknown";
+
+export interface ReviewUiAnchor {
+	/** Host-app stable anchor id for row/card/detail/field highlighting. */
+	id: string;
+	/** Optional host-app route when a field has a more precise target. */
+	routeTarget?: ReviewRouteTarget;
+	/** Optional non-secret hint consumed by the host UI. */
+	hint?: string;
+}
+
+export interface ReviewFieldSummary {
+	/** Structural field path inside the parsed record, not a filesystem path. */
+	fieldPath: string;
+	/** Human-facing field label supplied by the app/schema adapter. */
+	label: string;
+	changeKind: ReviewFieldChangeKind;
+	/** Deterministic short display value for review lists; raw diff can be lazy. */
+	beforeSummary?: string;
+	/** Deterministic short display value for review lists; raw diff can be lazy. */
+	afterSummary?: string;
+	/** Optional UI anchor for inline draft highlighting. */
+	uiAnchor?: ReviewUiAnchor;
+}
+
+export interface ResourceChange {
+	/** Stable within one draft/review computation; shared by panels, rows and publish readiness. */
+	changeId: string;
+	kind: ResourceChangeKind;
+	/** Deterministic app/schema summary, e.g. field count or generated artifact note. */
+	summary: string;
+	/** Technical file evidence kept for developer details, Git review and agents. */
+	technicalRefs: ReviewTechnicalReference[];
+	/** Structural field summary; empty when only a raw technical diff is known. */
+	fields: ReviewFieldSummary[];
+	/** Draft representation hash used to invalidate reviewed state after edits. */
+	draftContentHash?: string;
+	/** Source technical refs for generated outputs, when known. */
+	generatedFrom?: ReviewTechnicalReference[];
+}
+
+/** Ordered degradation levels for review surfaces. */
+export type ReviewFallbackLevel =
+	| "resource_adapter"
+	| "generic_schema_diff"
+	| "technical_file_diff"
+	| "unknown";
+
+export interface ReviewFallbackStep {
+	level: ReviewFallbackLevel;
+	/** User-facing description of what this step can still show. */
+	label: string;
+	/** Why the richer level was unavailable, or why this level was chosen. */
+	reason?: string;
+	/** Technical evidence exposed only in details/agent views. */
+	technicalRefs?: ReviewTechnicalReference[];
+}
+
+export interface ReviewFallbackLadder {
+	/** The level that produced the current review representation. */
+	activeLevel: ReviewFallbackLevel;
+	/** Ordered from richest app adapter down to raw technical fallback. */
+	steps: ReviewFallbackStep[];
+}
+
+export type ReviewStateValue =
+	| "unreviewed"
+	| "reviewed"
+	| "stale"
+	| "blocked"
+	| "not_required";
+
+export interface ReviewedStateKey {
+	/** Baseline HEAD used when the draft review representation was computed. */
+	baselineHead: string;
+	/** Stable app/resource id; never a filesystem path. */
+	stableResourceId: string;
+	/** Resource-related paths included only to invalidate moves/renames. */
+	resourcePaths: string[];
+	/** Hash of the draft review representation or backing draft content. */
+	draftContentHash: string;
+	/** Review contract version, usually REVIEW_SURFACE_CONTRACT_VERSION. */
+	reviewContractVersion: string;
+	/** Semantic adapter version; bump only for review-invalidating changes. */
+	adapterVersion?: string;
+	/** Semantic schema version; bump when field meaning/shape invalidates review. */
+	schemaVersion?: string;
+}
+
+export interface ReviewState {
+	value: ReviewStateValue;
+	/** Persistence/invalidation key for durable reviewed marks. */
+	key?: ReviewedStateKey;
+	reviewedAt?: string;
+	reviewedBy?: string;
+	/** Human or deterministic reason for blocked/stale/not-required states. */
+	reason?: string;
+}
+
+export type PublishReadinessReferenceKind =
+	| "schema_error"
+	| "conflict"
+	| "unreviewed_change"
+	| "validation_error"
+	| "generated_policy"
+	| "unknown";
+
+export interface PublishReadinessReference {
+	kind: PublishReadinessReferenceKind;
+	/** True when publish must not continue until this reference is resolved. */
+	blocking: boolean;
+	/** Deterministic human-facing explanation. */
+	message: string;
+	/** Related review change ids, if the readiness item points at draft changes. */
+	changeIds?: string[];
+	/** Related stable resource ids, if known. */
+	stableResourceIds?: string[];
+	/** Technical evidence for developer details or agent handoff. */
+	technicalRefs?: ReviewTechnicalReference[];
+}
+
+export interface ReviewableResource {
+	/** Host-app id used for grouping; not coupled to any specific product domain. */
+	appId: string;
+	/** App-defined generic resource type, e.g. a record/document/item category. */
+	resourceType: string;
+	/** Stable resource id shared by app UI, review panel and publish readiness. */
+	stableResourceId: string;
+	/** Primary user-facing label. Do not use a raw data-repo path here. */
+	label: string;
+	/** Optional jump target for opening the resource in the host app. */
+	routeTarget?: ReviewRouteTarget;
+	changes: ResourceChange[];
+	reviewState: ReviewState;
+	fallback: ReviewFallbackLadder;
+	/** Blocking/non-blocking references shown in the final publish summary. */
+	publishReadiness?: PublishReadinessReference[];
+	/** Non-secret app metadata for grouping/rendering. */
+	metadata?: Record<string, unknown>;
+}
+
+export interface ReviewSurfaceAdapter<TChange = ResourceChange> {
+	/** Stable adapter id for local metadata and diagnostics. */
+	id: string;
+	/** Host-app id whose resources this adapter resolves. */
+	appId: string;
+	/** Contract version supported by this adapter. */
+	contractVersion: string;
+	/** Semantic adapter version; bump only for review-invalidating changes. */
+	adapterVersion: string;
+	/** Semantic schema version for the app-provided parsed data shape. */
+	schemaVersion?: string;
+	/** Optional path globs documented by the host app for registry matching. */
+	supportedPathGlobs?: string[];
+	/** Resolve raw/generic changes into user-facing reviewable resources. */
+	toReviewableResources(
+		changes: readonly TChange[],
+	): ReviewableResource[] | Promise<ReviewableResource[]>;
+}
+
 export interface CommitTrailers {
 	app: string;
 	dataRepo: string;
@@ -95,7 +302,7 @@ export interface CommitTrailers {
 export interface PublishOptions {
 	/** Human actor recorded in the commit trailers, e.g. `Jana <jana@firma.cz>`. */
 	actor: string;
-	/** Producing surface, e.g. `deals-app-v3` or `repository-db-cli`. */
+	/** Producing surface, e.g. `sample-app-v1` or `repository-db-cli`. */
 	source: string;
 	/** Optional human summary used as the first commit-message line. */
 	summary?: string;

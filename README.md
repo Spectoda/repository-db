@@ -6,9 +6,9 @@ collection CRUD, an explicit draft → publish lifecycle, deterministic
 generated read models and hard guards against operating in the wrong Git
 repository.
 
-The engine is domain-agnostic. Application schemas (e.g. Spectoda Deals) are
-injected by the host app through a zod-compatible parser contract; the engine
-itself depends only on `yaml`.
+The engine is domain-agnostic. Application schemas are injected by the host app
+through a zod-compatible parser contract; the engine itself depends only on
+`yaml`.
 
 ## Model
 
@@ -16,7 +16,7 @@ itself depends only on `yaml`.
   `data/` (canonical YAML collections), `generated/` (committed deterministic
   read models), `scripts/` (repo-local materializers/validators) and
   `repository-db.yaml` (the config contract). It is mounted into an
-  app-specific path (e.g. `modules/deals/db/`) and managed by this engine —
+  app-specific path (e.g. `modules/sample-app/db/`) and managed by this engine —
   not by workspace sync tooling.
 - **Major data generation = Git branch** (`v3`, `v4`, …). A later generation
   starts as a clean orphan branch migrated from the previous generation's
@@ -40,17 +40,30 @@ Remote changes are detected via `git fetch` (`status --fetch`, `sync`) — no
 inbound webhook is required; webhooks are only a faster signal where a host
 can accept them.
 
+## Review Surface contracts
+
+Repository DB exposes app-agnostic TypeScript contracts for a future Review
+Surface: `ReviewableResource`, `ResourceChange`, `ReviewSurfaceAdapter`, review
+state, fallback levels and publish-readiness references. Host apps provide
+adapters that map technical data-repo changes to stable resource ids, readable
+labels, app route targets and structural field summaries. Data-repo paths remain
+available as technical metadata for Git review and agent handoff, but they are
+not the primary normal-user label.
+
+See [`docs/review-surface-contract.md`](docs/review-surface-contract.md) for the
+contract shape, fallback ladder and adapter/schema versioning policy.
+
 ## CLI
 
 ```bash
-repository-db init --app deals --remote git@github.com:Spectoda/deals-data.git \
-  --branch v3 --mount ../deals/db --schema-name deals-data --schema-version 3.0.0-alpha.0 \
+repository-db init --app sample --remote git@github.com:example/repository-data.git \
+  --branch v1 --mount ../sample/db --schema-name sample-data --schema-version 1.0.0 \
   [--create-remote] [--visibility private]
 repository-db status [--fetch] [--json]
 repository-db validate
 repository-db sync
-repository-db publish --actor "Jana <jana@firma.cz>" --source deals-app-v3 \
-  [--summary "…"] [--entity deal-123]...
+repository-db publish --actor "Example User <user@example.com>" --source sample-app-v1 \
+  [--summary "…"] [--entity record-123]...
 repository-db conflict [--abort | --resolved]
 ```
 
@@ -94,14 +107,14 @@ before touching the working tree.
 import { RepositoryDb } from "@spectoda/repository-db";
 
 const db = RepositoryDb.open("/path/to/app/db");
-const deals = db.collection("deals", {
-  schemaVersion: "deal.v3",
-  parser: dealRecordSchema, // any zod-compatible { parse(value) } object
+const records = db.collection("records", {
+  schemaVersion: "record.v1",
+  parser: recordSchema, // any zod-compatible { parse(value) } object
 });
 
-deals.put("deal-123", record);          // local draft (no commit)
+records.put("record-123", record);      // local draft (no commit)
 const status = await db.statusAsync({ fetch: true });
-const result = await db.publish({ actor: "Jana <jana@firma.cz>", source: "deals-app-v3" });
+const result = await db.publish({ actor: "Example User <user@example.com>", source: "sample-app-v1" });
 ```
 
 ## Development
