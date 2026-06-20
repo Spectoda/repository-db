@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased — DEV-6370 phase 0
+## Unreleased
 
+- Add app-agnostic Review Surface contract types/docs/tests for
+  `ReviewableResource`, `ResourceChange`, adapter fallback levels, reviewed-state
+  invalidation keys and publish-readiness references (DEV-6383 slice 011).
 - Network git ops (`clone`, `fetch`, `push`, bootstrap `push --set-upstream`)
   now run via an
   async runner (`runGitAsync` / `gitFetchAsync`) with an explicit
@@ -35,7 +38,7 @@
 
 ## 0.1.0 — 20260610
 
-- Initial engine release for the DEV-6353 Deals v3 pilot.
+- Initial engine release for the DEV-6353 V3 data-engine pilot.
 - `repository-db.yaml` config contract (`repository-db.config.v1`): app, data
   repo remote/branch, schema name/version, layout, generated manifest,
   validate commands.
