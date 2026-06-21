@@ -1,13 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import {
 	REVIEW_SURFACE_CONTRACT_VERSION,
+	type JsonObject,
 	type PublishReadinessReference,
+	type PublishReadinessSummary,
 	type ResourceChange,
 	type ResourceChangeKind,
 	type ReviewFallbackLevel,
+	type ReviewFieldRenderHint,
+	type ReviewFieldValueKind,
+	type ReviewInputChange,
 	type ReviewableResource,
 	type ReviewedStateKey,
+	type ReviewSurfaceContractMetadata,
 	type ReviewStateValue,
+	type ReviewSurfaceSnapshot,
 	type ReviewSurfaceAdapter,
 } from "../src/index.ts";
 
@@ -37,6 +44,32 @@ const reviewStates = [
 	"blocked",
 	"not_required",
 ] satisfies ReviewStateValue[];
+
+const fieldValueKinds = [
+	"text",
+	"number",
+	"boolean",
+	"date",
+	"enum",
+	"money",
+	"url",
+	"email",
+	"object",
+	"array",
+	"unknown",
+] satisfies ReviewFieldValueKind[];
+
+const fieldRenderHints = [
+	"plain",
+	"multiline",
+	"code",
+	"badge",
+	"link",
+	"currency",
+	"date",
+	"relative_time",
+	"json",
+] satisfies ReviewFieldRenderHint[];
 
 const readinessReferences = [
 	{
@@ -86,9 +119,11 @@ const changes = [
 		technicalRefs: [{ path: fixturePath, kind: "canonical_data_path" }],
 		fields: [
 			{
-				fieldPath: "title",
+				fieldPath: "/title",
 				label: "Title",
 				changeKind: "created",
+				valueKind: "text",
+				renderHint: "plain",
 				afterSummary: "Fixture Alpha",
 				uiAnchor: { id: "fixture-title-field" },
 			},
@@ -102,15 +137,17 @@ const changes = [
 		technicalRefs: [{ path: fixturePath, kind: "canonical_data_path" }],
 		fields: [
 			{
-				fieldPath: "details.status",
+				fieldPath: "/details/status",
 				label: "Status",
 				changeKind: "modified",
+				valueKind: "enum",
+				renderHint: "badge",
 				beforeSummary: "Draft",
 				afterSummary: "Ready for review",
 				uiAnchor: {
 					id: "fixture-status-field",
 					routeTarget: {
-						href: "/fixture/records/alpha?review=details.status",
+						href: "/fixture/records/alpha?review=/details/status",
 					},
 				},
 			},
@@ -124,9 +161,11 @@ const changes = [
 		technicalRefs: [{ path: fixturePath, kind: "canonical_data_path" }],
 		fields: [
 			{
-				fieldPath: "title",
+				fieldPath: "/title",
 				label: "Title",
 				changeKind: "deleted",
+				valueKind: "text",
+				renderHint: "plain",
 				beforeSummary: "Fixture Alpha",
 			},
 		],
@@ -161,6 +200,15 @@ const reviewKey = {
 	schemaVersion: "fixture.schema.v1",
 } satisfies ReviewedStateKey;
 
+const contractMetadata = {
+	reviewContractVersion: REVIEW_SURFACE_CONTRACT_VERSION,
+	adapterId: "fixture-review-adapter",
+	adapterVersion: "1.0.0",
+	schemaVersion: "fixture.schema.v1",
+	dataSchemaVersion: "fixture-data@1.0.0",
+	computedAt: "2026-06-21T00:00:00.000Z",
+} satisfies ReviewSurfaceContractMetadata;
+
 const resource = {
 	appId: "fixture-app",
 	resourceType: "fixture-record",
@@ -172,6 +220,8 @@ const resource = {
 		params: { id: "alpha" },
 		context: { review: true },
 	},
+	contractMetadata,
+	reviewRepresentationHash: "sha256:resource-review-fixture",
 	changes,
 	reviewState: {
 		value: "unreviewed",
@@ -191,8 +241,53 @@ const resource = {
 		],
 	},
 	publishReadiness: readinessReferences,
-	metadata: { fixtureOnly: true },
+	metadata: { fixtureOnly: true, tags: ["synthetic", "review-surface"] },
 } satisfies ReviewableResource;
+
+const inputChanges = [
+	{
+		changeId: "fixture-input:modified",
+		kind: "modified",
+		technicalRefs: [{ path: fixturePath, kind: "canonical_data_path" }],
+		summary: "Fixture path changed before adapter enrichment.",
+		draftContentHash: "sha256:input-draft",
+		baselineContentHash: "sha256:input-baseline",
+		metadata: { source: "synthetic-test" },
+	},
+	{
+		changeId: "fixture-input:renamed",
+		kind: "renamed",
+		technicalRefs: [{ path: fixturePath, kind: "canonical_data_path" }],
+		previousTechnicalRefs: [
+			{ path: "data/fixture-records/fixture-old-alpha.yaml", kind: "canonical_data_path" },
+		],
+		summary: "Fixture path was renamed before adapter enrichment.",
+	},
+] satisfies ReviewInputChange[];
+
+const publishReadiness = {
+	state: "blocked",
+	canPublish: false,
+	references: readinessReferences,
+} satisfies PublishReadinessSummary;
+
+const snapshotMetadata = {
+	fixtureOnly: true,
+	counts: { resources: 1, changes: changes.length },
+	tags: ["synthetic", "review-surface"],
+} satisfies JsonObject;
+
+const snapshot = {
+	reviewContractVersion: REVIEW_SURFACE_CONTRACT_VERSION,
+	baselineHead: reviewKey.baselineHead,
+	computedAt: contractMetadata.computedAt,
+	inputChanges,
+	resources: [resource],
+	publishReadiness,
+	fallback: resource.fallback,
+	reviewRepresentationHash: "sha256:snapshot-review-fixture",
+	metadata: snapshotMetadata,
+} satisfies ReviewSurfaceSnapshot;
 
 const adapter = {
 	id: "fixture-review-adapter",
@@ -201,8 +296,21 @@ const adapter = {
 	adapterVersion: "1.0.0",
 	schemaVersion: "fixture.schema.v1",
 	supportedPathGlobs: ["data/fixture-records/*.yaml"],
-	toReviewableResources(inputChanges) {
-		return [{ ...resource, changes: [...inputChanges] }];
+	toReviewableResources(rawChanges) {
+		return [
+			{
+				...resource,
+				changes: rawChanges.map((change) => ({
+					changeId: change.changeId,
+					kind: change.kind === "renamed" ? "modified" : change.kind,
+					summary: change.summary ?? "Fixture raw input change.",
+					technicalRefs: change.technicalRefs,
+					fields: [],
+					draftContentHash: change.draftContentHash,
+					generatedFrom: change.generatedFrom,
+				})),
+			},
+		];
 	},
 } satisfies ReviewSurfaceAdapter;
 
@@ -223,6 +331,10 @@ describe("Review Surface contract types", () => {
 		]);
 		expect(reviewStates).toContain("reviewed");
 		expect(reviewStates).toContain("not_required");
+		expect(fieldValueKinds).toContain("money");
+		expect(fieldValueKinds).toContain("unknown");
+		expect(fieldRenderHints).toContain("badge");
+		expect(fieldRenderHints).toContain("json");
 	});
 
 	test("keeps technical paths out of the primary user-facing label", () => {
@@ -232,7 +344,9 @@ describe("Review Surface contract types", () => {
 		expect(resource.routeTarget?.href).toBe("/fixture/records/alpha?review=1");
 		expect(resource.changes.map((change) => change.kind)).toEqual(changeKinds);
 		expect(resource.changes[0]?.technicalRefs[0]?.path).toBe(fixturePath);
-		expect(resource.changes[1]?.fields[0]?.fieldPath).toBe("details.status");
+		expect(resource.changes[1]?.fields[0]?.fieldPath).toBe("/details/status");
+		expect(resource.changes[1]?.fields[0]?.valueKind).toBe("enum");
+		expect(resource.changes[1]?.fields[0]?.renderHint).toBe("badge");
 	});
 
 	test("allows publish readiness to point at blocking and non-blocking review evidence", () => {
@@ -248,17 +362,32 @@ describe("Review Surface contract types", () => {
 		expect(resource.reviewState.key?.reviewContractVersion).toBe(
 			REVIEW_SURFACE_CONTRACT_VERSION,
 		);
+		expect(resource.contractMetadata?.adapterId).toBe("fixture-review-adapter");
+		expect(resource.contractMetadata?.adapterVersion).toBe("1.0.0");
+		expect(resource.contractMetadata?.dataSchemaVersion).toBe("fixture-data@1.0.0");
+		expect(snapshot.publishReadiness.canPublish).toBe(false);
 	});
 
-	test("lets a synthetic app adapter resolve generic changes to reviewable resources", async () => {
-		const resolved = await adapter.toReviewableResources(changes);
+	test("lets a synthetic app adapter resolve raw input changes to reviewable resources", async () => {
+		const resolved = await adapter.toReviewableResources(inputChanges);
 
 		expect(adapter.supportedPathGlobs).toEqual(["data/fixture-records/*.yaml"]);
 		expect(resolved).toHaveLength(1);
 		expect(resolved[0]?.appId).toBe("fixture-app");
 		expect(resolved[0]?.fallback.activeLevel).toBe("resource_adapter");
 		expect(resolved[0]?.changes.map((change) => change.changeId)).toEqual(
-			changes.map((change) => change.changeId),
+			inputChanges.map((change) => change.changeId),
 		);
+		expect(resolved[0]?.changes[1]?.kind).toBe("modified");
+	});
+
+	test("describes a top-level review snapshot with JSON-safe metadata", () => {
+		expect(snapshot.reviewContractVersion).toBe(REVIEW_SURFACE_CONTRACT_VERSION);
+		expect(snapshot.resources[0]?.stableResourceId).toBe(stableResourceId);
+		expect(snapshot.inputChanges?.[1]?.previousTechnicalRefs?.[0]?.path).toBe(
+			"data/fixture-records/fixture-old-alpha.yaml",
+		);
+		expect(snapshot.metadata?.counts).toEqual({ resources: 1, changes: 5 });
+		expect(snapshot.reviewRepresentationHash).toBe("sha256:snapshot-review-fixture");
 	});
 });
