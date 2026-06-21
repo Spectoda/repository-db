@@ -25,9 +25,15 @@ an adapter registry, UI, persistence or publish behavior change.
 - `ReviewTechnicalReference` keeps data-repo paths available for developer
   details, Git review and agent handoff. These paths are technical metadata and
   must not be the primary normal-user label.
-- `ReviewSurfaceAdapter` is the app-provided bridge from generic repository
+- `ReviewInputChange` is the raw repository-db draft/generated/unknown path
+  input before app enrichment. It carries technical refs, coarse Git-ish status,
+  optional hashes and optional non-secret JSON diagnostics.
+- `ReviewSurfaceAdapter` is the app-provided bridge from raw generic repository
   changes to reviewable resources. A later registry can match adapters by path
   globs and call `toReviewableResources`.
+- `ReviewSurfaceSnapshot` is the top-level computed review payload for panels or
+  publish summaries. It carries the contract version, baseline head, resources,
+  aggregate publish readiness, fallback diagnostics and optional raw inputs.
 
 ## Identity and labels
 
@@ -46,7 +52,9 @@ const resource = {
     adapterId: "fixture-review-adapter",
     adapterVersion: "1.0.0",
     schemaVersion: "fixture.schema.v1",
+    dataSchemaVersion: "fixture-data@1.0.0",
   },
+  reviewRepresentationHash: "sha256:resource-review-fixture",
   changes: [],
   reviewState: { value: "unreviewed" },
   fallback: { activeLevel: "resource_adapter", steps: [] },
@@ -66,7 +74,7 @@ render hints:
 
 ```ts
 const field = {
-  fieldPath: "details.status",
+  fieldPath: "/details/status",
   label: "Status",
   changeKind: "modified",
   valueKind: "enum",
@@ -75,6 +83,10 @@ const field = {
   afterSummary: "Ready for review",
 };
 ```
+
+`fieldPath` should be a JSON Pointer (RFC 6901) into the parsed record, for
+example `/details/status`. Adapters that need a legacy or app-owned path syntax
+must document it and keep it deterministic.
 
 `valueKind` and `renderHint` are generic. They describe how a shared review
 surface may present a value (`text`, `money`, `date`, `enum`, `object`, …) and
@@ -97,6 +109,36 @@ only standardizes the summary metadata.
 
 Unknown changes still appear in review and publish readiness. They degrade to a
 technical diff; they must not disappear just because no adapter exists.
+
+## Raw input and snapshot shape
+
+The adapter input is `ReviewInputChange`, not a fully rendered
+`ResourceChange`. A raw input change is still technical: it references
+repo-relative paths and coarse change status before any app labels, route targets
+or field summaries exist. Renames can carry `previousTechnicalRefs`; generated
+changes can carry `generatedFrom`; metadata must be JSON-serializable and
+non-secret.
+
+A computed `ReviewSurfaceSnapshot` is the stable top-level handoff object for a
+review panel or publish summary:
+
+```ts
+const snapshot = {
+  reviewContractVersion: REVIEW_SURFACE_CONTRACT_VERSION,
+  baselineHead: "0123456789abcdef0123456789abcdef01234567",
+  resources: [resource],
+  publishReadiness: {
+    state: "blocked",
+    canPublish: false,
+    references: [],
+  },
+  fallback: resource.fallback,
+  reviewRepresentationHash: "sha256:snapshot-review-fixture",
+};
+```
+
+This is advisory contract shape only in this slice. It does not wire review
+readiness into `publish()`, persist reviewed marks, or register adapters.
 
 ## Fallback ladder
 
@@ -125,12 +167,16 @@ Persisted review marks should include:
 - `resourcePaths` — technical paths only for move/rename invalidation;
 - `draftContentHash` — hash of the review representation or backing draft data;
 - `reviewContractVersion` — usually `REVIEW_SURFACE_CONTRACT_VERSION`;
-- `adapterVersion` and `schemaVersion` when provided by the host adapter.
+- `adapterVersion` and `schemaVersion` when provided by the host adapter;
+- `dataSchemaVersion` when the app needs to disambiguate data/schema contract
+  identity from repository-db config or commit trailer schema names.
 
 If any of those values changes, an old `reviewed` mark can become stale and
 should not satisfy a required review gate. The same version identity should be
 visible in `contractMetadata` when a resource is handed to a panel, adapter test
-or publish-readiness summary.
+or publish-readiness summary. A resource or snapshot `reviewRepresentationHash`
+should be derived from stable resource ids, field summaries, technical refs, the
+fallback level, baseline head, and review/adapter/schema versions.
 
 ## Adapter/schema version policy
 
@@ -157,7 +203,10 @@ Do not bump only for non-invalidating changes, for example:
 ## Publish readiness references
 
 `PublishReadinessReference` lets the final publish summary point to blocking and
-non-blocking evidence. The generic kinds cover:
+non-blocking evidence. `PublishReadinessSummary` aggregates those references into
+`ready`, `blocked`, `warning` or `unknown` plus a convenience `canPublish` flag.
+This is advisory contract data in this slice; actual `publish()` gating remains
+unchanged until a later implementation task. The generic kinds cover:
 
 - `schema_error` — parsed data failed a schema/adapter validation;
 - `conflict` — repository conflict state blocks writes or publish;
@@ -168,3 +217,12 @@ non-blocking evidence. The generic kinds cover:
 
 References can point at `changeIds`, `stableResourceIds` and `technicalRefs` so a
 review panel, app row and publish summary can talk about the same draft change.
+
+
+## JSON metadata boundary
+
+`routeTarget.context`, `ReviewInputChange.metadata`, `ReviewableResource.metadata`
+and `ReviewSurfaceSnapshot.metadata` are typed as JSON objects. They are for
+small, non-secret diagnostics or grouping hints. They must not carry credentials,
+OAuth material, cookies, local host paths or business data that belongs in the
+app resource itself.

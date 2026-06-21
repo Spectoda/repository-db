@@ -44,11 +44,12 @@ can accept them.
 
 Repository DB exposes app-agnostic TypeScript contracts for a future Review
 Surface: `ReviewableResource`, `ResourceChange`, `ReviewSurfaceAdapter`, review
-state, fallback levels and publish-readiness references. Host apps provide
-adapters that map technical data-repo changes to stable resource ids, readable
-labels, app route targets and structural field summaries. Data-repo paths remain
-available as technical metadata for Git review and agent handoff, but they are
-not the primary normal-user label.
+state, fallback levels, raw input changes, top-level review snapshots and
+publish-readiness summaries. Host apps provide adapters that map technical
+data-repo changes to stable resource ids, readable labels, app route targets and
+structural field summaries. Data-repo paths remain available as technical
+metadata for Git review and agent handoff, but they are not the primary
+normal-user label.
 
 See [`docs/review-surface-contract.md`](docs/review-surface-contract.md) for the
 contract shape, fallback ladder and adapter/schema versioning policy.

@@ -80,6 +80,12 @@ export interface SyncStatus {
 	fetched: boolean;
 }
 
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+export interface JsonObject {
+	[key: string]: JsonValue;
+}
+
 /**
  * Current public Review Surface representation contract.
  *
@@ -118,8 +124,8 @@ export interface ReviewRouteTarget {
 	label?: string;
 	/** Stable route params when the host router separates route name from params. */
 	params?: Record<string, string>;
-	/** Extra non-secret routing context for the host app. */
-	context?: Record<string, unknown>;
+	/** Extra non-secret JSON routing context for the host app. */
+	context?: JsonObject;
 }
 
 export type ReviewFieldChangeKind =
@@ -165,7 +171,7 @@ export type ReviewFieldRenderHint =
 	| "json";
 
 export interface ReviewFieldSummary {
-	/** Structural field path inside the parsed record, not a filesystem path. */
+	/** Structural JSON Pointer path inside the parsed record, not a filesystem path. */
 	fieldPath: string;
 	/** Human-facing field label supplied by the app/schema adapter. */
 	label: string;
@@ -196,6 +202,28 @@ export interface ResourceChange {
 	draftContentHash?: string;
 	/** Source technical refs for generated outputs, when known. */
 	generatedFrom?: ReviewTechnicalReference[];
+}
+
+export type ReviewInputChangeKind = ResourceChangeKind | "renamed";
+
+export interface ReviewInputChange {
+	/** Stable raw change id before an app adapter enriches the review representation. */
+	changeId: string;
+	kind: ReviewInputChangeKind;
+	/** Current technical refs for the dirty/generated/unknown path. */
+	technicalRefs: ReviewTechnicalReference[];
+	/** Previous refs for moves/renames when a caller can detect them. */
+	previousTechnicalRefs?: ReviewTechnicalReference[];
+	/** Optional deterministic raw status summary before app-specific enrichment. */
+	summary?: string;
+	/** Hash of the current draft file/content/representation when available. */
+	draftContentHash?: string;
+	/** Hash of the baseline file/content when available. */
+	baselineContentHash?: string;
+	/** Source technical refs for generated outputs, when known. */
+	generatedFrom?: ReviewTechnicalReference[];
+	/** Non-secret JSON metadata for diagnostics; not a UI label. */
+	metadata?: JsonObject;
 }
 
 /** Ordered degradation levels for review surfaces. */
@@ -265,6 +293,8 @@ export interface ReviewSurfaceContractMetadata {
 	adapterVersion?: string;
 	/** Semantic schema version; bump when field meaning/shape invalidates review. */
 	schemaVersion?: string;
+	/** Explicit data/schema contract version; use when `schemaVersion` would be ambiguous. */
+	dataSchemaVersion?: string;
 	/** ISO timestamp when this review representation was computed. */
 	computedAt?: string;
 }
@@ -291,6 +321,16 @@ export interface PublishReadinessReference {
 	technicalRefs?: ReviewTechnicalReference[];
 }
 
+export type PublishReadinessState = "ready" | "blocked" | "warning" | "unknown";
+
+export interface PublishReadinessSummary {
+	/** Aggregate advisory state for the current review snapshot. */
+	state: PublishReadinessState;
+	/** Convenience flag; false when any blocking reference is active. */
+	canPublish: boolean;
+	references: PublishReadinessReference[];
+}
+
 export interface ReviewableResource {
 	/** Host-app id used for grouping; not coupled to any specific product domain. */
 	appId: string;
@@ -304,16 +344,34 @@ export interface ReviewableResource {
 	routeTarget?: ReviewRouteTarget;
 	/** Version identity for the representation shown to reviewers. */
 	contractMetadata?: ReviewSurfaceContractMetadata;
+	/** Hash of the visible review representation for invalidating stale marks. */
+	reviewRepresentationHash?: string;
 	changes: ResourceChange[];
 	reviewState: ReviewState;
 	fallback: ReviewFallbackLadder;
 	/** Blocking/non-blocking references shown in the final publish summary. */
 	publishReadiness?: PublishReadinessReference[];
-	/** Non-secret app metadata for grouping/rendering. */
-	metadata?: Record<string, unknown>;
+	/** Non-secret JSON app metadata for grouping/rendering. */
+	metadata?: JsonObject;
 }
 
-export interface ReviewSurfaceAdapter<TChange = ResourceChange> {
+export interface ReviewSurfaceSnapshot {
+	reviewContractVersion: string;
+	baselineHead: string;
+	computedAt?: string;
+	/** Raw input changes used to compute the resource representation, if retained. */
+	inputChanges?: ReviewInputChange[];
+	resources: ReviewableResource[];
+	publishReadiness: PublishReadinessSummary;
+	/** Aggregate fallback diagnostics for snapshot-level consumers. */
+	fallback: ReviewFallbackLadder;
+	/** Hash of the snapshot review representation for coarse invalidation. */
+	reviewRepresentationHash?: string;
+	/** Non-secret JSON metadata for diagnostics or host grouping. */
+	metadata?: JsonObject;
+}
+
+export interface ReviewSurfaceAdapter<TChange = ReviewInputChange> {
 	/** Stable adapter id for local metadata and diagnostics. */
 	id: string;
 	/** Host-app id whose resources this adapter resolves. */
