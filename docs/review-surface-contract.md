@@ -19,7 +19,9 @@ an adapter registry, UI, persistence or publish behavior change.
   covers `created`, `modified`, `deleted`, `generated` and `unknown` changes.
 - `ReviewFieldSummary` is the structural field summary used by review lists and
   inline highlights. It uses parsed-record paths such as `details.status`, not
-  filesystem paths.
+  filesystem paths. It may include app-agnostic `valueKind` and `renderHint`
+  metadata so a shared review panel can render fields without importing an app
+  component library.
 - `ReviewTechnicalReference` keeps data-repo paths available for developer
   details, Git review and agent handoff. These paths are technical metadata and
   must not be the primary normal-user label.
@@ -39,6 +41,12 @@ const resource = {
   stableResourceId: "fixture-record:alpha",
   label: "Fixture Alpha",
   routeTarget: { href: "/fixture/records/alpha?review=1" },
+  contractMetadata: {
+    reviewContractVersion: REVIEW_SURFACE_CONTRACT_VERSION,
+    adapterId: "fixture-review-adapter",
+    adapterVersion: "1.0.0",
+    schemaVersion: "fixture.schema.v1",
+  },
   changes: [],
   reviewState: { value: "unreviewed" },
   fallback: { activeLevel: "resource_adapter", steps: [] },
@@ -49,6 +57,31 @@ The `label` is the primary review UI text. A data-repo path such as
 `data/fixture-records/fixture-alpha.yaml` belongs in `technicalRefs`, a technical
 details disclosure or an agent/Git handoff. It is never the default button/link
 label for normal app users.
+
+
+## Field metadata
+
+`ReviewFieldSummary` deliberately separates machine paths, readable labels and
+render hints:
+
+```ts
+const field = {
+  fieldPath: "details.status",
+  label: "Status",
+  changeKind: "modified",
+  valueKind: "enum",
+  renderHint: "badge",
+  beforeSummary: "Draft",
+  afterSummary: "Ready for review",
+};
+```
+
+`valueKind` and `renderHint` are generic. They describe how a shared review
+surface may present a value (`text`, `money`, `date`, `enum`, `object`, …) and
+which broad renderer is safe (`plain`, `badge`, `currency`, `json`, …). They are
+not app component names and must not encode business-domain types. Detailed raw
+values can still be loaded lazily by a later diff/detail API; this contract slice
+only standardizes the summary metadata.
 
 ## Change kinds
 
@@ -82,8 +115,10 @@ diagnostics. A missing adapter is a degraded review state, not a hidden change.
 
 ## Reviewed-state invalidation key
 
-`ReviewedStateKey` is designed for local repository-db metadata. Persisted review
-marks should include:
+`ReviewSurfaceContractMetadata` travels with a rendered resource so review
+consumers know which contract, adapter and schema versions produced the visible
+representation. `ReviewedStateKey` is designed for local repository-db metadata.
+Persisted review marks should include:
 
 - `baselineHead` — HEAD used when the draft representation was computed;
 - `stableResourceId` — the app/resource id, not a path;
@@ -93,7 +128,9 @@ marks should include:
 - `adapterVersion` and `schemaVersion` when provided by the host adapter.
 
 If any of those values changes, an old `reviewed` mark can become stale and
-should not satisfy a required review gate.
+should not satisfy a required review gate. The same version identity should be
+visible in `contractMetadata` when a resource is handed to a panel, adapter test
+or publish-readiness summary.
 
 ## Adapter/schema version policy
 

@@ -3,8 +3,9 @@
 ## Unreleased
 
 - Add app-agnostic Review Surface contract types/docs/tests for
-  `ReviewableResource`, `ResourceChange`, adapter fallback levels, reviewed-state
-  invalidation keys and publish-readiness references (DEV-6383 slice 011).
+  `ReviewableResource`, `ResourceChange`, field value/render metadata, adapter
+  fallback levels, contract metadata, reviewed-state invalidation keys and
+  publish-readiness references (DEV-6383 task-2026-06-21-001).
 - Network git ops (`clone`, `fetch`, `push`, bootstrap `push --set-upstream`)
   now run via an
   async runner (`runGitAsync` / `gitFetchAsync`) with an explicit

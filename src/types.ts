@@ -138,12 +138,42 @@ export interface ReviewUiAnchor {
 	hint?: string;
 }
 
+/** App-agnostic value categories used to render field summaries safely. */
+export type ReviewFieldValueKind =
+	| "text"
+	| "number"
+	| "boolean"
+	| "date"
+	| "enum"
+	| "money"
+	| "url"
+	| "email"
+	| "object"
+	| "array"
+	| "unknown";
+
+/** Generic rendering hints; host apps may map these to their own components. */
+export type ReviewFieldRenderHint =
+	| "plain"
+	| "multiline"
+	| "code"
+	| "badge"
+	| "link"
+	| "currency"
+	| "date"
+	| "relative_time"
+	| "json";
+
 export interface ReviewFieldSummary {
 	/** Structural field path inside the parsed record, not a filesystem path. */
 	fieldPath: string;
 	/** Human-facing field label supplied by the app/schema adapter. */
 	label: string;
 	changeKind: ReviewFieldChangeKind;
+	/** Coarse value kind for app-agnostic review rendering and filtering. */
+	valueKind?: ReviewFieldValueKind;
+	/** Optional generic renderer hint; never a framework/component name. */
+	renderHint?: ReviewFieldRenderHint;
 	/** Deterministic short display value for review lists; raw diff can be lazy. */
 	beforeSummary?: string;
 	/** Deterministic short display value for review lists; raw diff can be lazy. */
@@ -226,6 +256,19 @@ export interface ReviewState {
 	reason?: string;
 }
 
+export interface ReviewSurfaceContractMetadata {
+	/** Review representation contract that shaped this resource. */
+	reviewContractVersion: string;
+	/** Adapter that produced the user-facing representation, when known. */
+	adapterId?: string;
+	/** Semantic adapter version; bump only for review-invalidating changes. */
+	adapterVersion?: string;
+	/** Semantic schema version; bump when field meaning/shape invalidates review. */
+	schemaVersion?: string;
+	/** ISO timestamp when this review representation was computed. */
+	computedAt?: string;
+}
+
 export type PublishReadinessReferenceKind =
 	| "schema_error"
 	| "conflict"
@@ -259,6 +302,8 @@ export interface ReviewableResource {
 	label: string;
 	/** Optional jump target for opening the resource in the host app. */
 	routeTarget?: ReviewRouteTarget;
+	/** Version identity for the representation shown to reviewers. */
+	contractMetadata?: ReviewSurfaceContractMetadata;
 	changes: ResourceChange[];
 	reviewState: ReviewState;
 	fallback: ReviewFallbackLadder;
