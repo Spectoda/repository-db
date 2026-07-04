@@ -40,19 +40,30 @@ Remote changes are detected via `git fetch` (`status --fetch`, `sync`) — no
 inbound webhook is required; webhooks are only a faster signal where a host
 can accept them.
 
-## Review Surface contracts
+## Review Surface and Draft Publish Card contracts
 
-Repository DB exposes app-agnostic TypeScript contracts for a future Review
-Surface: `ReviewableResource`, `ResourceChange`, `ReviewSurfaceAdapter`, review
-state, fallback levels, raw input changes, top-level review snapshots and
-publish-readiness summaries. Host apps provide adapters that map technical
-data-repo changes to stable resource ids, readable labels, app route targets and
-structural field summaries. Data-repo paths remain available as technical
-metadata for Git review and agent handoff, but they are not the primary
-normal-user label.
+Repository DB exposes app-agnostic TypeScript contracts for higher-level v3 UI
+surfaces:
 
-See [`docs/review-surface-contract.md`](docs/review-surface-contract.md) for the
-contract shape, fallback ladder and adapter/schema versioning policy.
+- a future Review Surface: `ReviewableResource`, `ResourceChange`,
+  `ReviewSurfaceAdapter`, review state, fallback levels, raw input changes,
+  top-level review snapshots and publish-readiness summaries. Host apps provide
+  adapters that map technical data-repo changes to stable resource ids, readable
+  labels, app route targets and structural field summaries. Data-repo paths remain
+  available as technical metadata for Git review and agent handoff, but they are
+  not the primary normal-user label;
+- a framework-agnostic Draft Publish Card view-model:
+  `deriveDraftPublishCard()` turns `SyncStatus` plus host freshness/pending
+  review evidence into a stable card snapshot (`conflict` > `draft` > `pending`
+  > `remote` > `published`) with semantic actions (`publish`, `pull`,
+  `open_review`, `resolve_conflict`, `details`). Every repository-db-backed v3
+  app should render this card globally instead of inventing a separate
+  app-local draft/publish popup.
+
+See [`docs/review-surface-contract.md`](docs/review-surface-contract.md) and
+[`docs/draft-publish-card-contract.md`](docs/draft-publish-card-contract.md) for
+the contract shapes, fallback ladder, adapter/schema versioning policy and v3 app
+behavior requirements.
 
 ## CLI
 

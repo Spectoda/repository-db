@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add the app-agnostic Draft Publish Card contract and
+  `deriveDraftPublishCard()` helper so every repository-db-backed v3 app can
+  render the same global draft/publish/pull/conflict card while keeping its own
+  framework/UI shell.
+
 - Add app-agnostic Review Surface contract types/docs/tests for
   `ReviewableResource`, `ResourceChange`, raw input changes, top-level review
   snapshots, field value/render metadata, adapter fallback levels, contract
