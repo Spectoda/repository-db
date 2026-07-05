@@ -12,6 +12,18 @@ export { assertDataRepoBoundary, normalizeRemoteUrl } from "./boundary.ts";
 export { deriveSyncStatus, deriveSyncStatusAsync } from "./status.ts";
 export type { StatusOptions } from "./status.ts";
 export {
+	DRAFT_PUBLISH_CARD_CONTRACT_VERSION,
+	deriveDraftPublishCard,
+} from "./draftPublishCard.ts";
+export type {
+	DraftPublishCardAction,
+	DraftPublishCardActionKind,
+	DraftPublishCardFreshness,
+	DraftPublishCardInput,
+	DraftPublishCardSnapshot,
+	DraftPublishCardTone,
+} from "./draftPublishCard.ts";
+export {
 	runGitAsync,
 	runGitAsyncOrThrow,
 	gitFetchAsync,
