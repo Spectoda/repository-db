@@ -1,4 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { assertDataRepoBoundary } from "./boundary.ts";
 import {
 	assertNoActiveConflict,
@@ -13,6 +15,7 @@ import {
 	gitHeadCommit,
 	gitOperationInProgress,
 	gitUnmergedPaths,
+	runGit,
 	runGitAsync,
 	runGitOrThrow,
 } from "./git.ts";
@@ -23,6 +26,7 @@ import {
 } from "./generated.ts";
 import { ENGINE_DIR, acquirePublishLock } from "./lock.ts";
 import { buildCommitMessage, newChangeId } from "./trailers.ts";
+import { writeFileAtomic } from "./yamlIo.ts";
 import {
 	type PublishOptions,
 	type PublishResult,
@@ -51,6 +55,38 @@ function defaultSubject(
 			? ` [${entities.slice(0, 3).join(", ")}${entities.length > 3 ? ", …" : ""}]`
 			: "";
 	return `${config.app}: publish ${parts.join(", ") || "no changes"}${entitySuffix}`;
+}
+
+const PUBLISH_LOCK_RELATIVE_PATH = `${ENGINE_DIR}/publish.lock`;
+const ENGINE_GITIGNORE_RULE = `/${ENGINE_DIR}/`;
+
+function ensureEngineDirectoryIgnored(mountRoot: string): void {
+	const gitignorePath = path.join(mountRoot, ".gitignore");
+	const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf8") : "";
+	if (existing.split(/\r?\n/).some((line) => line.trim() === ENGINE_GITIGNORE_RULE)) return;
+	const prefix = existing.length === 0 || existing.endsWith("\n") ? existing : `${existing}\n`;
+	writeFileAtomic(gitignorePath, `${prefix}${ENGINE_GITIGNORE_RULE}\n`);
+}
+
+/**
+ * Old repository-db versions could stage the runtime lock through `git add --all`.
+ * Remove only that non-authoritative runtime file from the index while the lock is
+ * held, then keep the engine directory ignored so the new lock cannot re-enter the
+ * same publish batch. Conflict state remains protected by assertNoActiveConflict.
+ */
+function stageTrackedPublishLockCleanup(mountRoot: string): void {
+	if (runGit(mountRoot, ["ls-files", "--error-unmatch", "--", PUBLISH_LOCK_RELATIVE_PATH]).status !== 0) {
+		return;
+	}
+	ensureEngineDirectoryIgnored(mountRoot);
+	runGitOrThrow(mountRoot, ["rm", "--cached", "--ignore-unmatch", "--", PUBLISH_LOCK_RELATIVE_PATH]);
+}
+
+function stagePublishBatch(mountRoot: string): void {
+	runGitOrThrow(mountRoot, ["add", "--all"]);
+	// `git add --all` stages tracked files even when they are ignored. Re-assert
+	// the one-time deletion after staging so a runtime lock cannot be committed.
+	stageTrackedPublishLockCleanup(mountRoot);
 }
 
 /**
@@ -182,6 +218,7 @@ export async function publish(
 
 	const releaseLock = acquirePublishLock(mountRoot);
 	try {
+		stageTrackedPublishLockCleanup(mountRoot);
 		if (!options.skipValidate) {
 			runValidateCommands(mountRoot, config);
 		}
@@ -221,9 +258,8 @@ export async function publish(
 		// Integrate remote changes before committing the local batch.
 		await integrateRemoteChanges(mountRoot, config, "publish");
 
-		// Stage the whole batch. ENGINE_DIR is gitignored in the data repo;
-		// undeclared generated diffs were already refused above.
-		runGitOrThrow(mountRoot, ["add", "--all"]);
+		// Stage the publishable batch while preserving the runtime engine layer.
+		stagePublishBatch(mountRoot);
 
 		const staged = runGitOrThrow(mountRoot, ["diff", "--cached", "--name-only"])
 			.split("\n")
