@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { RepositoryDb } from "../src/repositoryDb.ts";
 import { parseCommitMessage } from "../src/trailers.ts";
@@ -187,6 +187,46 @@ describe("publish flow", () => {
 			expect(
 				(await db.publish({ actor: "a <a@a>", source: "test" })).state,
 			).toBe("nothing_to_publish");
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
+	test("removes a historically tracked runtime lock and never republishes it", async () => {
+		const fixture = createFixtureRepo();
+		try {
+			const lockPath = path.join(fixture.mountPath, ".repository-db", "publish.lock");
+			const gitignorePath = path.join(fixture.mountPath, ".gitignore");
+			writeFileSync(gitignorePath, "node_modules/\n", "utf8");
+			mkdirSync(path.dirname(lockPath), { recursive: true });
+			writeFileSync(
+				lockPath,
+				JSON.stringify({ pid: 999_999_999, hostname: "fixture", acquiredAt: "2000-01-01T00:00:00.000Z" }),
+				"utf8",
+			);
+			git(fixture.mountPath, ["add", "--all"]);
+			git(fixture.mountPath, ["commit", "--message", "legacy tracked engine lock"]);
+			git(fixture.mountPath, ["push", "origin", fixture.branch]);
+			rmSync(lockPath);
+
+			const db = RepositoryDb.open(fixture.mountPath);
+			writeFixtureDocument(fixture.mountPath, "thing-1", { name: "first" });
+			const result = await db.publish({ actor: "a <a@a>", source: "test" });
+
+			expect(result.state).toBe("published");
+			expect(git(fixture.mountPath, ["status", "--porcelain"]).trim()).toBe("");
+			expect(readFileSync(gitignorePath, "utf8")).toContain("/.repository-db/");
+			expect(
+				git(fixture.originPath, [
+					"ls-tree",
+					"-r",
+					"--name-only",
+					fixture.branch,
+					"--",
+					".repository-db/publish.lock",
+				]).trim(),
+			).toBe("");
+			expect(existsSync(lockPath)).toBe(false);
 		} finally {
 			rmSync(fixture.root, { recursive: true, force: true });
 		}

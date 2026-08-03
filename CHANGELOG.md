@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `publish()` now repairs the legacy case where `.repository-db/publish.lock`
+  was accidentally tracked: it stages a one-time index removal, ensures the
+  engine layer is ignored, and never re-publishes the runtime PID/hostname lock.
+  The publish fixture proves both the remote tree and local Git status are clean
+  after the repair.
+
 - Add the app-agnostic Draft Publish Card contract and
   `deriveDraftPublishCard()` helper so every repository-db-backed v3 app can
   render the same global draft/publish/pull/conflict card while keeping its own
