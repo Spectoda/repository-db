@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@spectoda/repository-db",
+      "name": "@lazurio/repository-db",
       "dependencies": {
         "yaml": "^2.8.0",
       },

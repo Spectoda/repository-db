@@ -70,7 +70,7 @@ node_modules/
 function defaultReadme(options: InitOptions): string {
 	return `# ${options.app}-data
 
-Application data repository managed by [@spectoda/repository-db](https://github.com/Spectoda/repository-db).
+Application data repository managed by [@lazurio/repository-db](https://github.com/Lazurio/repository-db).
 
 - Major data generation = Git branch (current: \`${options.branch}\`). Later
   generations start as clean orphan branches (e.g. \`v4\`), not directories.

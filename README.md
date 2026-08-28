@@ -1,4 +1,4 @@
-# @spectoda/repository-db
+# @lazurio/repository-db
 
 Git-backed YAML repository database engine. A thick client gets a local,
 serverless data layer: canonical YAML documents in a Git "data repo", typed
@@ -116,7 +116,7 @@ before touching the working tree.
 ## Library usage
 
 ```ts
-import { RepositoryDb } from "@spectoda/repository-db";
+import { RepositoryDb } from "@lazurio/repository-db";
 
 const db = RepositoryDb.open("/path/to/app/db");
 const records = db.collection("records", {

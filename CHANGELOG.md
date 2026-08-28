@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Move the public repository to `Lazurio/repository-db` and rename the package
+  to `@lazurio/repository-db`; generated data-repo READMEs now point to the new
+  canonical owner as well.
+
 - `publish()` now repairs the legacy case where `.repository-db/publish.lock`
   was accidentally tracked: it stages a one-time index removal, ensures the
   engine layer is ignored, and never re-publishes the runtime PID/hostname lock.
