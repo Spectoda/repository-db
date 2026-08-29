@@ -9,7 +9,7 @@ Deals-specific.
 
 Three layers with strict responsibilities:
 
-1. **Engine** (`@spectoda/repository-db`, public): Git-backed YAML mechanics —
+1. **Engine** (`@lazurio/repository-db`, public): Git-backed YAML mechanics —
    config contract, boundary guard, collections CRUD, sync status, publish
    and conflict lifecycle, generated manifest policy, credential preflight. The
    engine must never contain business schemas, business data or secrets.

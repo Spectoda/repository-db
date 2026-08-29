@@ -1,6 +1,6 @@
 # repository-db — pravidla pro agenta
 
-Public engine `@spectoda/repository-db`. Repo je veřejné; platí tvrdá hranice
+Public engine `@lazurio/repository-db`. Repo je veřejné; platí tvrdá hranice
 obsahu.
 
 ## Hranice

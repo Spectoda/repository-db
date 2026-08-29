@@ -30,7 +30,7 @@ import {
   deriveDraftPublishCard,
   DRAFT_PUBLISH_CARD_CONTRACT_VERSION,
   type DraftPublishCardSnapshot,
-} from "@spectoda/repository-db";
+} from "@lazurio/repository-db";
 
 const snapshot: DraftPublishCardSnapshot = deriveDraftPublishCard({
   status,               // repository-db SyncStatus
